@@ -1,119 +1,743 @@
 // renderer.js - Electron Renderer Process
 let photos = [];
-let currentIndex = 0;
+let currentPageIndex = 0; // Hangi 15'lik grubu gösteriyoruz
 let slideInterval;
 let serverUrl = '';
-const SLIDE_INTERVAL_MS = 5000; // 5 saniye
+const SLIDE_INTERVAL_MS = 5000; // 5 saniye - Her 15 fotoğraf için 5 saniye
+const PHOTOS_PER_PAGE = 15; // Her sayfada 15 fotoğraf
+const MAX_PHOTOS = 300; // En fazla 300 foto (20 slayt)
+
+// Ayarlar
+let settings = {
+  bgImage: null,
+  bgColor: '#000000',
+  qrCodeImage: null // Özel QR kod görüntüsü (base64 veya data URL)
+};
+
+// Blob URL'leri temizle (memory leak önleme)
+function revokeBlobURLs() {
+  photos.forEach(url => {
+    if (url && url.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        // Zaten iptal edilmiş olabilir
+      }
+    }
+  });
+}
 
 // Sunucu URL'ini al
 async function initialize() {
   try {
     if (window.electronAPI) {
+      // Electron üzerinden ayarlanmış URL
       serverUrl = await window.electronAPI.getServerUrl();
     } else {
-      // Fallback: localStorage'dan, env'den veya config'den
-      // Önce localStorage kontrol et, yoksa config dosyası, yoksa localhost
+      // Fallback: localStorage veya sabit config
       serverUrl = localStorage.getItem('serverUrl') || 
-                  (window.SERVER_URL || 'http://localhost:3000');
+                  (window.SERVER_URL || 'https://m3fotodepo.com');
     }
-    
-    // Eğer Render'da deploy edilmişse, Render URL'sini kullan
-    // Bu URL bir config dosyasından veya environment variable'dan gelecek
-    console.log('Server URL:', serverUrl);
+
+    console.log('🚀 Uygulama başlatılıyor...');
+    console.log('📡 Server URL:', serverUrl);
+
+    // QR kod veya sabit PNG QR ekle
     generateQRCode();
-    loadPhotos();
-    
-    // Her 10 saniyede bir fotoğrafları yeniden yükle
+
+    // Önce cache'den hızlı başlangıç (eğer varsa)
+    const cacheLoaded = await loadFromCache();
+    if (cacheLoaded && photos.length > 0) {
+      console.log('⚡ Cache\'den hızlı başlangıç yapıldı');
+      // Slideshow zaten başlatıldı (loadFromCache içinde)
+    }
+
+    // Fotoğrafları sunucudan yükle (cache'yi güncelleyecek)
+    await loadPhotos();
+
+    // Her 10 saniyede bir foto güncelle (cache kontrolü ile)
     setInterval(loadPhotos, 10000);
+    
+    // Uygulama kapanırken blob URL'leri ve cache'i temizle
+    let isCleaningUp = false;
+    
+    const cleanupCache = async () => {
+      if (isCleaningUp) return; // Tekrar çağrılmasını önle
+      isCleaningUp = true;
+      
+      console.log('🚪 Uygulama kapatılıyor, cache temizleniyor...');
+      
+      try {
+        // Blob URL'leri temizle
+        revokeBlobURLs();
+        
+        // Cache'i temizle
+        await clearAllCachedPhotos();
+      } catch (error) {
+        console.error('Cache temizleme hatası:', error);
+      }
+    };
+    
+    // beforeunload event'i (uygulama kapatılırken)
+    window.addEventListener('beforeunload', () => {
+      // Async işlemleri navigator.sendBeacon veya sync olarak çalıştır
+      cleanupCache();
+    });
+    
+    // pagehide event'i (sayfa gizlendiğinde - daha güvenilir)
+    window.addEventListener('pagehide', (event) => {
+      // persisted false ise sayfa tamamen kapanıyor
+      if (!event.persisted) {
+        cleanupCache();
+      }
+    });
+    
+    // visibilitychange event'i (ek olarak)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        // Sayfa gizlendi, cleanup yapabiliriz
+        cleanupCache();
+      }
+    });
   } catch (error) {
-    console.error('Initialization error:', error);
+    console.error('❌ Initialization error:', error);
+    // Hata durumunda cache'den yüklemeyi dene
+    await loadFromCache();
   }
 }
 
-// QR Kod oluştur
-function generateQRCode() {
-  const qrContainer = document.getElementById('qr-code');
-  const uploadUrl = `${serverUrl}/`;
-  
-  // QRCode.js kullanarak QR kod oluştur
-  QRCode.toCanvas(qrContainer, uploadUrl, {
-    width: 250,
-    margin: 2,
-    color: {
-      dark: '#000000',
-      light: '#FFFFFF'
-    }
-  }, function (error) {
-    if (error) {
-      console.error('QR Code generation error:', error);
-      qrContainer.innerHTML = '<p style="color: red;">QR Kod oluşturulamadı</p>';
-    }
+
+// ============================================
+// INDEXEDDB CACHE MECHANISM
+// ============================================
+const DB_NAME = 'm3foto-db';
+const DB_VERSION = 1;
+const STORE_PHOTOS = 'photos';
+const STORE_METADATA = 'metadata';
+
+// IndexedDB'yi aç
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    
+    request.onerror = () => {
+      console.error('IndexedDB açılamadı:', request.error);
+      reject(request.error);
+    };
+    
+    request.onsuccess = () => {
+      resolve(request.result);
+    };
+    
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      
+      // Fotoğraf verileri için store
+      if (!db.objectStoreNames.contains(STORE_PHOTOS)) {
+        const photoStore = db.createObjectStore(STORE_PHOTOS, { keyPath: 'id' });
+        photoStore.createIndex('url', 'url', { unique: true });
+        photoStore.createIndex('lastModified', 'lastModified', { unique: false });
+        console.log('IndexedDB: photos store oluşturuldu');
+      }
+      
+      // Metadata için store (son update zamanı vb.)
+      if (!db.objectStoreNames.contains(STORE_METADATA)) {
+        db.createObjectStore(STORE_METADATA, { keyPath: 'key' });
+        console.log('IndexedDB: metadata store oluşturuldu');
+      }
+    };
   });
 }
 
-// Fotoğrafları sunucudan yükle
+// Fotoğrafı IndexedDB'de kontrol et
+async function getCachedPhoto(photoUrl) {
+  try {
+    const db = await openDB();
+    const transaction = db.transaction([STORE_PHOTOS], 'readonly');
+    const store = transaction.objectStore(STORE_PHOTOS);
+    const index = store.index('url');
+    
+    return new Promise((resolve, reject) => {
+      const request = index.get(photoUrl);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => {
+        console.error('Cache okuma hatası:', request.error);
+        resolve(null);
+      };
+    });
+  } catch (error) {
+    console.error('getCachedPhoto hatası:', error);
+    return null;
+  }
+}
+
+// Cache'den fotoğraf blob'unu al (blob URL döndürür)
+async function getCachedPhotoBlob(photoUrl) {
+  try {
+    const cached = await getCachedPhoto(photoUrl);
+    if (cached && cached.blob) {
+      // Blob URL oluştur
+      return URL.createObjectURL(cached.blob);
+    }
+    return null;
+  } catch (error) {
+    console.error('getCachedPhotoBlob hatası:', error);
+    return null;
+  }
+}
+
+// IndexedDB'deki eski fotoğrafları sil (FIFO - First In First Out)
+async function deleteOldestCachedPhotos(keepCount = MAX_PHOTOS) {
+  try {
+    const db = await openDB();
+    const transaction = db.transaction([STORE_PHOTOS], 'readwrite');
+    const store = transaction.objectStore(STORE_PHOTOS);
+    
+    // Tüm fotoğrafları al
+    const request = store.getAll();
+    const allPhotos = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+    
+    if (allPhotos.length <= keepCount) {
+      return; // Limit aşılmamış, silme gerek yok
+    }
+    
+    // cachedAt tarihine göre sırala (en eski önce - FIFO)
+    allPhotos.sort((a, b) => {
+      const dateA = new Date(a.cachedAt || a.lastModified || 0);
+      const dateB = new Date(b.cachedAt || b.lastModified || 0);
+      return dateA - dateB; // En eski önce
+    });
+    
+    // En eski fotoğrafları sil (limit aşanlar)
+    const photosToDelete = allPhotos.slice(0, allPhotos.length - keepCount);
+    
+    for (const photo of photosToDelete) {
+      // Blob URL'i varsa temizle
+      if (photo.blob) {
+        // photos array'inde bu fotoğrafın blob URL'i varsa bul ve temizle
+        const blobUrl = photos.find(url => {
+          if (url.startsWith('blob:')) {
+            try {
+              // Blob URL'den blob'u al ve karşılaştır
+              // Not: Bu çok pahalı olabilir, daha iyi bir yöntem kullanılmalı
+              return false; // Şimdilik sadece photos array'inden kaldır
+            } catch (e) {
+              return false;
+            }
+          }
+          return false;
+        });
+      }
+      
+      // IndexedDB'den sil
+      await new Promise((resolve, reject) => {
+        const deleteRequest = store.delete(photo.id);
+        deleteRequest.onsuccess = () => resolve();
+        deleteRequest.onerror = () => reject(deleteRequest.error);
+      });
+    }
+    
+    if (photosToDelete.length > 0) {
+      console.log(`🗑️ ${photosToDelete.length} eski fotoğraf silindi (FIFO - limit: ${MAX_PHOTOS})`);
+    }
+  } catch (error) {
+    console.error('❌ Eski fotoğrafları silme hatası:', error);
+  }
+}
+
+// Fotoğrafı IndexedDB'ye kaydet (DUPLICATE ve VERSIYON KONTROLÜ İLE)
+async function cachePhoto(photoData) {
+  try {
+    // Önce kontrol et - zaten var mı?
+    const existing = await getCachedPhoto(photoData.url);
+    
+    if (existing) {
+      // Versiyon kontrolü - lastModified değişmiş mi?
+      const existingLastModified = existing.lastModified || '';
+      const newLastModified = photoData.lastModified || '';
+      
+      if (existingLastModified === newLastModified && existing.blob) {
+        console.log('✓ Fotoğraf zaten cache\'de ve güncel, tekrar indirilmedi:', photoData.url);
+        return existing; // Tekrar indirme, mevcut olanı döndür
+      } else {
+        console.log('⚠ Fotoğraf güncellenmiş, yeniden indiriliyor:', photoData.url);
+        console.log('  Eski:', existingLastModified, '-> Yeni:', newLastModified);
+        // Güncelleme varsa üzerine yaz
+      }
+    } else {
+      console.log('📥 Yeni fotoğraf indiriliyor:', photoData.url);
+    }
+    
+    // Fotoğrafı indir (Blob olarak)
+    const response = await fetch(photoData.url);
+    if (!response.ok) {
+      throw new Error(`Fotoğraf indirilemedi: ${response.status} ${response.statusText}`);
+    }
+    
+    const blob = await response.blob();
+    
+    // IndexedDB'ye kaydet
+    const db = await openDB();
+    const transaction = db.transaction([STORE_PHOTOS], 'readwrite');
+    const store = transaction.objectStore(STORE_PHOTOS);
+    
+    // Unique ID oluştur (URL'den)
+    const photoId = photoData.url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 200);
+    
+    const photoRecord = {
+      id: photoId,
+      url: photoData.url,
+      blob: blob,
+      lastModified: photoData.lastModified || new Date().toISOString(),
+      cachedAt: new Date().toISOString()
+    };
+    
+    await new Promise((resolve, reject) => {
+      const request = store.put(photoRecord);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+    
+    // 300 limit kontrolü - en eski fotoğrafları sil (FIFO)
+    await deleteOldestCachedPhotos(MAX_PHOTOS);
+    
+    console.log('✓ Fotoğraf cache\'lendi:', photoData.url, `(${Math.round(blob.size / 1024)}KB)`);
+    return photoRecord;
+  } catch (error) {
+    console.error('❌ Cache kaydetme hatası:', error, 'URL:', photoData.url);
+    return null;
+  }
+}
+
+// Offline durumunda cache'den yükle
+async function loadFromCache() {
+  try {
+    console.log('🔄 Offline mod: Cache\'den fotoğraflar yükleniyor...');
+    const db = await openDB();
+    const transaction = db.transaction([STORE_PHOTOS], 'readonly');
+    const store = transaction.objectStore(STORE_PHOTOS);
+    
+    const request = store.getAll();
+    const cachedPhotos = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+    
+    if (cachedPhotos && cachedPhotos.length > 0) {
+      // Son değiştirilme tarihine göre sırala (en yeni önce)
+      cachedPhotos.sort((a, b) => {
+        const dateA = new Date(a.lastModified || a.cachedAt || 0);
+        const dateB = new Date(b.lastModified || b.cachedAt || 0);
+        return dateB - dateA;
+      });
+      
+      // 300 limit: En fazla 300 foto göster
+      const limitedCachedPhotos = cachedPhotos.slice(0, MAX_PHOTOS);
+      if (cachedPhotos.length > MAX_PHOTOS) {
+        console.log(`⚠ Cache'de ${cachedPhotos.length} fotoğraf var, ilk ${MAX_PHOTOS} fotoğraf gösterilecek`);
+      }
+      
+      // Blob URL'lere dönüştür
+      photos = limitedCachedPhotos.map(photo => {
+        if (photo.blob) {
+          return URL.createObjectURL(photo.blob);
+        }
+        return photo.url; // Fallback
+      }).filter(url => url !== null);
+      
+      console.log('✓ Offline mod: Cache\'den', photos.length, 'fotoğraf yüklendi');
+      
+      // UI güncelle
+      const photoCountEl = document.getElementById('photo-count');
+      if (photoCountEl) {
+        photoCountEl.textContent = photos.length;
+      }
+      
+      const loadingEl = document.getElementById('loading');
+      if (loadingEl) {
+        loadingEl.style.display = 'none';
+      }
+      
+      const noPhotosEl = document.getElementById('no-photos');
+      if (noPhotosEl) {
+        noPhotosEl.style.display = 'none';
+      }
+      
+      const slideshowEl = document.getElementById('slideshow');
+      if (slideshowEl) {
+        slideshowEl.style.display = 'block';
+      }
+      
+      // Slideshow'u başlat
+      if (photos.length > 0) {
+        currentPageIndex = 0;
+        startSlideshow();
+      }
+      
+      return true;
+    } else {
+      console.log('⚠ Cache\'de fotoğraf yok');
+      return false;
+    }
+  } catch (error) {
+    console.error('❌ Cache\'den yükleme hatası:', error);
+    return false;
+  }
+}
+
+// Cache metadata'yı güncelle
+async function updateCacheMetadata(key, value) {
+  try {
+    const db = await openDB();
+    const transaction = db.transaction([STORE_METADATA], 'readwrite');
+    const store = transaction.objectStore(STORE_METADATA);
+    
+    await new Promise((resolve, reject) => {
+      const request = store.put({ key: key, value: value });
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    console.error('Metadata güncelleme hatası:', error);
+  }
+}
+
+// Cache metadata'yı oku
+async function getCacheMetadata(key) {
+  try {
+    const db = await openDB();
+    const transaction = db.transaction([STORE_METADATA], 'readonly');
+    const store = transaction.objectStore(STORE_METADATA);
+    
+    return new Promise((resolve) => {
+      const request = store.get(key);
+      request.onsuccess = () => {
+        const result = request.result;
+        resolve(result ? result.value : null);
+      };
+      request.onerror = () => resolve(null);
+    });
+  } catch (error) {
+    console.error('Metadata okuma hatası:', error);
+    return null;
+  }
+}
+
+// Tüm cache'lenmiş fotoğrafları sil (uygulama kapanırken)
+async function clearAllCachedPhotos() {
+  try {
+    console.log('🗑️ Tüm cache\'lenmiş fotoğraflar siliniyor...');
+    
+    const db = await openDB();
+    const transaction = db.transaction([STORE_PHOTOS], 'readwrite');
+    const store = transaction.objectStore(STORE_PHOTOS);
+    
+    // Tüm fotoğrafları sil
+    const request = store.clear();
+    
+    await new Promise((resolve, reject) => {
+      request.onsuccess = () => {
+        console.log('✓ Tüm cache\'lenmiş fotoğraflar silindi');
+        resolve();
+      };
+      request.onerror = () => {
+        console.error('❌ Cache temizleme hatası:', request.error);
+        reject(request.error);
+      };
+    });
+    
+    // Metadata'yı da temizle
+    const metadataTransaction = db.transaction([STORE_METADATA], 'readwrite');
+    const metadataStore = metadataTransaction.objectStore(STORE_METADATA);
+    await new Promise((resolve, reject) => {
+      const metadataRequest = metadataStore.clear();
+      metadataRequest.onsuccess = () => resolve();
+      metadataRequest.onerror = () => reject(metadataRequest.error);
+    });
+    
+    // Blob URL'leri de temizle
+    revokeBlobURLs();
+    
+    console.log('✓ IndexedDB tamamen temizlendi');
+    return true;
+  } catch (error) {
+    console.error('❌ Cache temizleme hatası:', error);
+    return false;
+  }
+}
+
+// ============================================
+// QR Kod görüntüsünü yükle (frame.png veya özel görüntü)
+// ============================================
+function generateQRCode() {
+  const qrContainer = document.getElementById('qr-code');
+  if (!qrContainer) {
+    console.error('QR kod container bulunamadı!');
+    return;
+  }
+  
+  const img = document.createElement('img');
+  img.alt = 'QR Code';
+  img.style.width = '100%';
+  img.style.height = 'auto';
+  img.style.display = 'block';
+  img.style.maxWidth = '100%';
+  
+  // Önce ayarlardan özel QR kod görüntüsünü kontrol et
+  if (settings.qrCodeImage) {
+    // Özel QR kod görüntüsü kullan
+    img.src = settings.qrCodeImage;
+    console.log('Özel QR kod görüntüsü yükleniyor (ayarlardan)');
+  } else {
+    // Varsayılan frame.png kullan
+    // Electron'da path düzeltmesi
+    if (window.location.protocol === 'file:') {
+      // Electron file protocol kullanıyor
+      const imgPath = window.location.pathname.replace(/\\/g, '/');
+      const basePath = imgPath.substring(0, imgPath.lastIndexOf('/'));
+      img.src = `${basePath}/frame.png`;
+    } else {
+      // Web browser (Live Server)
+      img.src = 'frame.png';
+    }
+    
+    img.onerror = function() {
+      console.error('frame.png yüklenemedi, tekrar deneniyor...');
+      // Alternatif path dene
+      img.src = './frame.png';
+    };
+    
+    console.log('Varsayılan QR kod görüntüsü yükleniyor (frame.png)');
+  }
+  
+  // Container'ı temizle ve img'i ekle
+  qrContainer.innerHTML = '';
+  qrContainer.appendChild(img);
+}
+
+// Fotoğrafları sunucudan yükle (IndexedDB cache ile)
 async function loadPhotos() {
   try {
-    const response = await fetch(`${serverUrl}/photos`);
+    console.log('📡 Fotoğraflar sunucudan yükleniyor, server URL:', serverUrl);
+    
+    const response = await fetch(`${serverUrl}/photos`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+      mode: 'cors',
+      credentials: 'omit'
+    });
     
     if (!response.ok) {
+      console.error(`❌ HTTP error! status: ${response.status}, statusText: ${response.statusText}`);
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
     const data = await response.json();
+    console.log('✓ Fotoğraf listesi alındı, toplam:', data.length);
     
     if (Array.isArray(data) && data.length > 0) {
-      // URL'leri düzelt (eğer relative ise absolute yap)
-      photos = data.map(photo => {
+      // Son yüklenen fotoğraflar önce gösterilsin (tarihe göre sıralama)
+      const sortedData = data.sort((a, b) => {
+        const dateA = a.lastModified ? new Date(a.lastModified) : new Date(0);
+        const dateB = b.lastModified ? new Date(b.lastModified) : new Date(0);
+        return dateB - dateA;
+      });
+      
+      // Fotoğraf URL'lerini normalize et
+      const photoDataList = sortedData.map(photo => {
+        let url = null;
         if (photo.url && photo.url.startsWith('http')) {
-          return photo.url;
+          url = photo.url;
         } else if (photo.url && photo.url.startsWith('/')) {
-          return `${serverUrl}${photo.url}`;
+          url = `${serverUrl}${photo.url}`;
         } else if (photo.file) {
-          return `${serverUrl}/uploads/${photo.file}`;
+          url = `${serverUrl}/uploads/${photo.file}`;
+        }
+        
+        if (url) {
+          return {
+            url: url,
+            lastModified: photo.lastModified || new Date().toISOString()
+          };
         }
         return null;
-      }).filter(url => url !== null);
+      }).filter(item => item !== null);
       
-      // Son yüklenen fotoğraflar önce gösterilsin (tarihe göre sıralama)
-      // Eğer lastModified varsa ona göre sırala
-      if (data[0] && data[0].lastModified) {
-        photos = data
-          .sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified))
-          .map(photo => {
-            if (photo.url && photo.url.startsWith('http')) {
-              return photo.url;
-            } else if (photo.url && photo.url.startsWith('/')) {
-              return `${serverUrl}${photo.url}`;
-            }
-            return null;
-          })
-          .filter(url => url !== null);
+      console.log('📋 İşlenecek fotoğraf sayısı:', photoDataList.length);
+      
+      // 300 limit: En fazla 300 foto göster (20 slayt)
+      const limitedPhotoDataList = photoDataList.slice(0, MAX_PHOTOS);
+      if (photoDataList.length > MAX_PHOTOS) {
+        console.log(`⚠ Fotoğraf sayısı limit aştı (${photoDataList.length}), ilk ${MAX_PHOTOS} fotoğraf gösterilecek`);
       }
       
-      // Fotoğraf sayısını güncelle
-      document.getElementById('photo-count').textContent = photos.length;
+      // Fotoğrafları cache'den veya internetten yükle
+      photos = [];
+      const cachePromises = [];
       
-      // Loading'i gizle, slideshow'u göster
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('no-photos').style.display = 'none';
-      document.getElementById('slideshow').style.display = 'block';
+      for (let i = 0; i < limitedPhotoDataList.length; i++) {
+        const photoData = limitedPhotoDataList[i];
+        
+        // Önce cache'de kontrol et
+        const cachedBlobUrl = await getCachedPhotoBlob(photoData.url);
+        
+        if (cachedBlobUrl) {
+          // Cache'den kullan - hemen göster
+          photos.push(cachedBlobUrl);
+        } else {
+          // Cache yoksa, önce normal URL ile göster (kullanıcı bekletme)
+          photos.push(photoData.url);
+          
+          // Arka planda cache'le (non-blocking)
+          const cachePromise = cachePhoto(photoData).then((cached) => {
+            if (cached && cached.blob) {
+              // Cache'lendikten sonra blob URL ile değiştir
+              const index = photos.indexOf(photoData.url);
+              if (index !== -1) {
+                const blobUrl = URL.createObjectURL(cached.blob);
+                photos[index] = blobUrl;
+                
+                // Eğer bu fotoğraf şu anda gösteriliyorsa sayfayı güncelle
+                const currentPage = Math.floor(index / PHOTOS_PER_PAGE);
+                if (currentPage === currentPageIndex) {
+                  showPhotoPage(currentPageIndex);
+                }
+              }
+            }
+          }).catch(err => {
+            console.error('Cache hatası (görmezden geliniyor):', err);
+          });
+          
+          cachePromises.push(cachePromise);
+        }
+      }
+      
+      // Tüm cache işlemlerinin tamamlanmasını bekle (arka planda)
+      Promise.all(cachePromises).then(() => {
+        console.log('✓ Tüm fotoğraflar cache\'lendi');
+        updateCacheMetadata('lastUpdate', new Date().toISOString());
+        
+        // Cache'de 300'ü aşan eski fotoğrafları sil (FIFO)
+        deleteOldestCachedPhotos(MAX_PHOTOS).then(() => {
+          console.log(`✓ Cache limit kontrolü tamamlandı (max: ${MAX_PHOTOS} fotoğraf)`);
+        });
+      });
+      
+      console.log('📸 Fotoğraf listesi hazır:', photos.length, 'fotoğraf');
+      console.log('  - Cache\'den:', photos.filter(url => url.startsWith('blob:')).length);
+      console.log('  - İnternetten:', photos.filter(url => !url.startsWith('blob:')).length);
+      
+      // Fotoğraf sayısını güncelle
+      const photoCountEl = document.getElementById('photo-count');
+      if (photoCountEl) {
+        photoCountEl.textContent = photos.length;
+      }
+      
+      // Loading'i gizle ve içeriğini temizle, slideshow'u göster
+      const loadingEl = document.getElementById('loading');
+      if (loadingEl) {
+        loadingEl.style.display = 'none';
+        loadingEl.innerHTML = '<p>Fotoğraflar yükleniyor...</p>'; // Orijinal haline döndür
+      }
+      
+      const noPhotosEl = document.getElementById('no-photos');
+      if (noPhotosEl) {
+        noPhotosEl.style.display = 'none';
+      }
+      
+      const slideshowEl = document.getElementById('slideshow');
+      if (slideshowEl) {
+        slideshowEl.style.display = 'block';
+      }
       
       // Eğer yeni fotoğraflar varsa slideshow'u başlat/yeniden başlat
       if (photos.length > 0) {
-        startSlideshow();
+        const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+        
+        // Eğer slideshow çalışmıyorsa başlat
+        if (!slideInterval) {
+          console.log('Slideshow ilk kez başlatılıyor...');
+          currentPageIndex = 0;
+          startSlideshow();
+        } else {
+          // Slideshow zaten çalışıyorsa timer'ı BOZMADAN sadece fotoğraf listesini güncelle
+          // showPhotoPage çağrılmamalı çünkü bu timer'ı etkiler ve sayfa değişikliğini tetikler
+          console.log('Slideshow devam ediyor, sadece fotoğraf listesi güncellendi (timer korunuyor, sayfa değişmiyor)');
+          
+          // Eğer mevcut sayfa index'i toplam sayfa sayısından büyükse veya eşitse düzelt
+          if (currentPageIndex >= totalPages) {
+            console.log(`Sayfa index (${currentPageIndex + 1}) toplam sayfa sayısından (${totalPages}) büyük, sıfırlanıyor`);
+            currentPageIndex = 0;
+            // Timer'ı koru, sadece mevcut sayfayı göster
+            showPhotoPage(currentPageIndex);
+          }
+          // Aksi halde hiçbir şey yapma - timer devam etsin, mevcut sayfa gösterilsin
+        }
       }
     } else {
       // Fotoğraf yoksa
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('slideshow').style.display = 'none';
-      document.getElementById('no-photos').style.display = 'block';
-      document.getElementById('photo-count').textContent = '0';
+      const loadingEl = document.getElementById('loading');
+      if (loadingEl) {
+        loadingEl.style.display = 'none';
+        loadingEl.innerHTML = '<p>Fotoğraflar yükleniyor...</p>'; // Orijinal haline döndür
+      }
+      
+      const slideshowEl = document.getElementById('slideshow');
+      if (slideshowEl) {
+        slideshowEl.style.display = 'none';
+      }
+      
+      const noPhotosEl = document.getElementById('no-photos');
+      if (noPhotosEl) {
+        noPhotosEl.style.display = 'block';
+      }
+      
+      const photoCountEl = document.getElementById('photo-count');
+      if (photoCountEl) {
+        photoCountEl.textContent = '0';
+      }
+      
       stopSlideshow();
     }
   } catch (error) {
-    console.error('Error loading photos:', error);
-    document.getElementById('loading').innerHTML = '<p style="color: red;">Sunucuya bağlanılamadı</p>';
+    console.error('❌ Sunucuya bağlanılamadı:', error);
+    
+    // Offline durumunda cache'den yükle
+    const cacheLoaded = await loadFromCache();
+    
+    if (!cacheLoaded) {
+      // Cache'de de yoksa hata göster
+      const loadingEl = document.getElementById('loading');
+      if (loadingEl) {
+        loadingEl.style.display = 'block';
+        loadingEl.innerHTML = '<p style="color: red;">Sunucuya bağlanılamadı</p><p style="color: #999; font-size: 14px; margin-top: 10px;">Cache\'de fotoğraf bulunamadı</p>';
+      }
+      
+      const slideshowEl = document.getElementById('slideshow');
+      if (slideshowEl) {
+        slideshowEl.style.display = 'none';
+      }
+      
+      const noPhotosEl = document.getElementById('no-photos');
+      if (noPhotosEl) {
+        noPhotosEl.style.display = 'none';
+      }
+    } else {
+      // Cache'den yüklendi, başarı mesajı göster
+      const loadingEl = document.getElementById('loading');
+      if (loadingEl) {
+        loadingEl.style.display = 'block';
+        loadingEl.innerHTML = '<p style="color: orange;">Offline mod</p><p style="color: #999; font-size: 14px; margin-top: 10px;">Cache\'den fotoğraflar gösteriliyor</p>';
+        setTimeout(() => {
+          if (loadingEl) loadingEl.style.display = 'none';
+        }, 2000);
+      }
+    }
   }
 }
 
@@ -121,81 +745,586 @@ async function loadPhotos() {
 function startSlideshow() {
   if (photos.length === 0) return;
   
-  // Eğer slideshow zaten çalışıyorsa durdur
+  // Eğer slideshow zaten çalışıyorsa durdur (setTimeout için clearTimeout kullan)
   if (slideInterval) {
-    clearInterval(slideInterval);
+    clearTimeout(slideInterval);
+    clearInterval(slideInterval); // Emin olmak için her ikisini de temizle
+    slideInterval = null;
   }
   
-  // İlk fotoğrafı göster
-  showPhoto(0);
+  // Toplam sayfa sayısını hesapla
+  const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
   
-  // Otomatik geçişi başlat
-  slideInterval = setInterval(() => {
-    currentIndex = (currentIndex + 1) % photos.length;
-    showPhoto(currentIndex);
-  }, SLIDE_INTERVAL_MS);
+  // İlk sayfayı göster
+  currentPageIndex = 0;
+  showPhotoPage(0);
+  
+  // Otomatik geçişi başlat (sadece birden fazla sayfa varsa)
+  if (totalPages > 1) {
+    // Her sayfa için tam 5 saniye bekle
+    scheduleNextPage();
+  }
+}
+
+// Bir sonraki sayfaya geçmeyi planla
+function scheduleNextPage() {
+  // Mevcut timer'ı temizle
+  if (slideInterval) {
+    clearTimeout(slideInterval);
+    clearInterval(slideInterval); // Her ihtimale karşı
+    slideInterval = null;
+  }
+  
+  const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+  
+  if (totalPages <= 1) {
+    console.log('Tek sayfa var, otomatik geçiş yapılmayacak');
+    return;
+  }
+  
+  const nextPageIndex = (currentPageIndex + 1) % totalPages;
+  console.log(`Sayfa ${currentPageIndex + 1}/${totalPages} gösteriliyor, tam 5 saniye sonra sayfa ${nextPageIndex + 1}'e geçilecek`);
+  
+  // TAM 5 saniye sonra bir sonraki sayfaya geç (timer'ı kaydet)
+  slideInterval = setTimeout(() => {
+    // Timer çalıştığında tekrar kontrol et
+    const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+    if (totalPages <= 1) {
+      slideInterval = null;
+      return;
+    }
+    
+    const nextPageIndex = (currentPageIndex + 1) % totalPages;
+    
+    console.log(`[TIMER] Sayfa değişiyor: ${currentPageIndex + 1} -> ${nextPageIndex + 1} (toplam ${totalPages} sayfa)`);
+    
+    // Sayfa değiştir
+    showPhotoPage(nextPageIndex);
+    
+    // Timer'ı null yap (showPhotoPage içinde currentPageIndex güncellenir)
+    slideInterval = null;
+    
+    // Bir sonraki sayfa geçişini planla (döngüsel - her zaman devam et)
+    scheduleNextPage();
+  }, SLIDE_INTERVAL_MS); // Her sayfa için tam 5 saniye
+  
+  console.log(`Timer kuruldu: ${SLIDE_INTERVAL_MS}ms (${SLIDE_INTERVAL_MS / 1000}s)`);
 }
 
 // Slideshow'u durdur
 function stopSlideshow() {
   if (slideInterval) {
+    // setInterval veya setTimeout olabilir
     clearInterval(slideInterval);
+    clearTimeout(slideInterval);
     slideInterval = null;
   }
 }
 
-// Fotoğraf göster
-function showPhoto(index) {
-  if (index < 0 || index >= photos.length) return;
+// Belirli bir sayfadaki fotoğrafları göster (15'lik grup)
+function showPhotoPage(pageIndex) {
+  if (photos.length === 0) return;
   
-  const slideImage = document.getElementById('slide-image');
-  const img = new Image();
+  const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+  if (pageIndex < 0 || pageIndex >= totalPages) return;
   
-  img.onload = function() {
-    slideImage.src = photos[index];
-    slideImage.style.opacity = '0';
-    setTimeout(() => {
-      slideImage.style.opacity = '1';
-    }, 50);
-  };
+  const gridContainer = document.getElementById('photo-grid');
+  if (!gridContainer) return;
   
-  img.onerror = function() {
-    console.error('Error loading image:', photos[index]);
-    // Hatalı fotoğrafı atla
-    currentIndex = (currentIndex + 1) % photos.length;
-    if (currentIndex !== index) {
-      showPhoto(currentIndex);
+  // currentPageIndex'i hemen güncelle (böylece timer doğru çalışır)
+  currentPageIndex = pageIndex;
+  
+  // Grid'i geçici olarak gizle (fade out) - smooth transition
+  gridContainer.classList.remove('active');
+  
+  // Fade out tamamlandıktan sonra içeriği değiştir
+  setTimeout(() => {
+    // Container'ı temizle
+    gridContainer.innerHTML = '';
+    
+    // Bu sayfa için fotoğrafları al
+    const startIndex = pageIndex * PHOTOS_PER_PAGE;
+    const endIndex = Math.min(startIndex + PHOTOS_PER_PAGE, photos.length);
+    const pagePhotos = photos.slice(startIndex, endIndex);
+    
+    // Her fotoğraf için grid item oluştur
+    pagePhotos.forEach((photoUrl, index) => {
+      const photoItem = document.createElement('div');
+      photoItem.className = 'photo-item';
+      // Staggered animation - her fotoğraf sırayla belirsin (daha akıcı)
+      photoItem.style.animationDelay = `${index * 0.02}s`;
+      
+      const img = document.createElement('img');
+      img.src = photoUrl;
+      img.alt = `Fotoğraf ${startIndex + index + 1}`;
+      img.loading = 'eager'; // Hızlı yükleme için
+      
+      img.onerror = function() {
+        console.error('Error loading image:', photoUrl);
+        // Hatalı fotoğraf için placeholder göster
+        photoItem.innerHTML = '<div class="photo-placeholder">Fotoğraf yüklenemedi</div>';
+      };
+      
+      photoItem.appendChild(img);
+      gridContainer.appendChild(photoItem);
+    });
+    
+    // 15'ten az fotoğraf varsa boş placeholder ekle
+    for (let i = pagePhotos.length; i < PHOTOS_PER_PAGE; i++) {
+      const emptyItem = document.createElement('div');
+      emptyItem.className = 'photo-item';
+      emptyItem.innerHTML = '<div class="photo-placeholder"></div>';
+      emptyItem.style.animationDelay = `${(pagePhotos.length + i) * 0.02}s`;
+      gridContainer.appendChild(emptyItem);
     }
-  };
+    
+    // Grid'i tekrar göster (fade in) - smooth transition
+    // requestAnimationFrame ile bir sonraki frame'de göstermek daha akıcı
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        gridContainer.classList.add('active');
+      });
+    });
+    
+    console.log(`Sayfa ${pageIndex + 1}/${totalPages} gösteriliyor (${startIndex + 1}-${endIndex} arası fotoğraflar, toplam ${photos.length} fotoğraf)`);
+  }, 350); // Fade out için yeterli süre (transition süresiyle uyumlu)
+}
+
+// Ayarları yükle
+function loadSettings() {
+  const savedSettings = localStorage.getItem('m3foto_settings');
+  if (savedSettings) {
+    try {
+      settings = JSON.parse(savedSettings);
+      applySettings();
+    } catch (e) {
+      console.error('Settings load error:', e);
+    }
+  }
+}
+
+// Ayarları uygula
+function applySettings() {
+  const body = document.body;
+  const slideshowSection = document.querySelector('.slideshow-section');
   
-  img.src = photos[index];
-  currentIndex = index;
+  if (!body) return;
+  
+  // Arkaplan rengi (varsayılan siyah)
+  const bgColor = settings.bgColor || '#000000';
+  
+  // Arkaplan fotoğrafı varsa body'ye uygula (tüm ekranı kapsasın)
+  if (settings.bgImage) {
+    body.style.backgroundImage = `url(${settings.bgImage})`;
+    body.style.backgroundSize = 'cover';
+    body.style.backgroundPosition = 'center';
+    body.style.backgroundRepeat = 'no-repeat';
+    body.style.backgroundColor = bgColor; // Renk fallback olarak
+  } else {
+    body.style.backgroundImage = 'none';
+    body.style.backgroundColor = bgColor;
+  }
+  
+  // Slideshow section'ı transparant yap (arkaplan görünsün)
+  if (slideshowSection) {
+    slideshowSection.style.backgroundColor = 'transparent';
+    slideshowSection.style.backgroundImage = 'none';
+  }
+  
+  // UI güncelleme
+  const bgColorInput = document.getElementById('bg-color-input');
+  const bgColorText = document.getElementById('bg-color-text');
+  if (bgColorInput) {
+    bgColorInput.value = bgColor;
+  }
+  if (bgColorText) {
+    bgColorText.value = bgColor;
+  }
+  
+  updateBgImagePreview();
+}
+
+// Arkaplan fotoğrafı önizlemesini güncelle
+function updateBgImagePreview() {
+  const preview = document.getElementById('bg-image-preview');
+  if (!preview) return;
+  
+  if (settings.bgImage) {
+    preview.innerHTML = `<img src="${settings.bgImage}" alt="Arkaplan">`;
+    preview.classList.remove('empty');
+  } else {
+    preview.innerHTML = '';
+    preview.classList.add('empty');
+  }
+}
+
+// QR kod görüntüsü önizlemesini güncelle
+function updateQRCodePreview() {
+  const preview = document.getElementById('qr-image-preview');
+  if (!preview) return;
+  
+  if (settings.qrCodeImage) {
+    preview.innerHTML = `<img src="${settings.qrCodeImage}" alt="QR Kod">`;
+    preview.classList.remove('empty');
+  } else {
+    preview.innerHTML = '';
+    preview.classList.add('empty');
+  }
+}
+
+// Ayarları kaydet
+function saveSettings() {
+  localStorage.setItem('m3foto_settings', JSON.stringify(settings));
+  applySettings();
+  // QR kod görüntüsü değişmişse güncelle
+  updateQRCodePreview();
+  if (settings.qrCodeImage !== undefined) {
+    generateQRCode();
+  }
+}
+
+// Tüm fotoğrafları sil (sunucudan ve cache'den)
+async function deleteAllPhotos() {
+  try {
+    console.log('🗑️ Tüm fotoğraflar siliniyor...');
+    
+    // Butonu devre dışı bırak (çift tıklamayı önle)
+    const deleteBtn = document.getElementById('delete-all-photos');
+    if (deleteBtn) {
+      deleteBtn.disabled = true;
+      deleteBtn.textContent = '⏳ Siliniyor...';
+    }
+    
+    // /delete_all endpoint'ini çağır (tüm fotoğrafları tek seferde sil)
+    const deleteUrl = `${serverUrl}/delete_all`;
+    console.log('🗑️ DELETE isteği gönderiliyor:', deleteUrl);
+    console.log('📡 Server URL:', serverUrl);
+    
+    const response = await fetch(deleteUrl, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      mode: 'cors',
+      credentials: 'omit'
+    });
+    
+    console.log('📡 Response status:', response.status, response.statusText);
+    
+    // Response body'yi bir kez oku (text veya json olabilir)
+    const responseText = await response.text();
+    console.log('📡 Response body:', responseText);
+    
+    let result;
+    try {
+      result = JSON.parse(responseText);
+    } catch (e) {
+      // JSON değilse text olarak kullan
+      result = { ok: false, error: responseText || 'Bilinmeyen hata' };
+    }
+    
+    if (!response.ok) {
+      console.error('❌ HTTP error! status:', response.status, 'body:', result);
+      throw new Error(`HTTP error! status: ${response.status}, statusText: ${response.statusText}, error: ${result.error || result.message || 'Endpoint bulunamadı'}`);
+    }
+    
+    if (!result.ok) {
+      throw new Error(result.error || 'Fotoğraflar silinemedi');
+    }
+    
+    console.log('✓ Tüm fotoğraflar sunucudan silindi');
+    
+    // Local cache'i de temizle
+    await clearAllCachedPhotos();
+    
+    // Fotoğraf listesini temizle
+    photos = [];
+    revokeBlobURLs();
+    stopSlideshow();
+    
+    // UI'ı güncelle
+    const photoCountEl = document.getElementById('photo-count');
+    if (photoCountEl) {
+      photoCountEl.textContent = '0';
+    }
+    
+    const slideshowEl = document.getElementById('slideshow');
+    if (slideshowEl) {
+      slideshowEl.style.display = 'none';
+    }
+    
+    const noPhotosEl = document.getElementById('no-photos');
+    if (noPhotosEl) {
+      noPhotosEl.style.display = 'block';
+    }
+    
+    const loadingEl = document.getElementById('loading');
+    if (loadingEl) {
+      loadingEl.style.display = 'none';
+    }
+    
+    // Başarı mesajı göster
+    alert('✓ Tüm fotoğraflar başarıyla silindi');
+    
+    // Butonu tekrar etkinleştir
+    if (deleteBtn) {
+      deleteBtn.disabled = false;
+      deleteBtn.textContent = '🗑️ Tüm Fotoğrafları Sil';
+    }
+    
+    // Fotoğrafları yeniden yükle (sunucudan yeni durumu al - boş liste dönecek)
+    await loadPhotos();
+    
+  } catch (error) {
+    console.error('❌ Tüm fotoğrafları silme hatası:', error);
+    alert('Fotoğraflar silinirken bir hata oluştu: ' + (error.message || error));
+    
+    // Butonu tekrar etkinleştir
+    const deleteBtn = document.getElementById('delete-all-photos');
+    if (deleteBtn) {
+      deleteBtn.disabled = false;
+      deleteBtn.textContent = '🗑️ Tüm Fotoğrafları Sil';
+    }
+  }
+}
+
+// Ayarlar panelini aç/kapa
+function toggleSettingsPanel() {
+  const panel = document.getElementById('settings-panel');
+  if (panel) {
+    panel.classList.toggle('open');
+  }
+}
+
+// Ayarlar panelini başlat
+function initSettings() {
+  loadSettings();
+  
+  const settingsPanel = document.getElementById('settings-panel');
+  const closeBtn = document.getElementById('close-settings');
+  const bgImageInput = document.getElementById('bg-image-input');
+  const bgImageUploadBtn = document.getElementById('bg-image-upload');
+  const bgImageRemoveBtn = document.getElementById('bg-image-remove');
+  const bgColorInput = document.getElementById('bg-color-input');
+  const bgColorText = document.getElementById('bg-color-text');
+  const colorPresets = document.querySelectorAll('.color-preset');
+  const qrImageInput = document.getElementById('qr-image-input');
+  const qrImageUploadBtn = document.getElementById('qr-image-upload');
+  const qrImageRemoveBtn = document.getElementById('qr-image-remove');
+  
+  // CTRL tuşu ile panel açma/kapama
+  let ctrlToggleTimer = null;
+  
+  document.addEventListener('keydown', (e) => {
+    // ESC ile kapatma
+    if (e.key === 'Escape') {
+      if (settingsPanel && settingsPanel.classList.contains('open')) {
+        settingsPanel.classList.remove('open');
+      }
+      return;
+    }
+    
+    // CTRL tuşuna basıldığında (tek başına)
+    if (e.key === 'Control' || e.key === 'Meta') {
+      // Başka bir tuşla kombinasyon yapılmamışsa
+      if (!e.shiftKey && !e.altKey) {
+        // Timer'ı temizle
+        if (ctrlToggleTimer) {
+          clearTimeout(ctrlToggleTimer);
+        }
+        
+        // Kısa bir süre bekle, eğer başka tuş basılmazsa toggle yap
+        ctrlToggleTimer = setTimeout(() => {
+          // CTRL hala basılı ve başka tuş basılmamışsa
+          toggleSettingsPanel();
+          ctrlToggleTimer = null;
+        }, 150);
+      }
+      return;
+    }
+    
+    // Eğer CTRL ile birlikte başka bir tuş basılırsa timer'ı iptal et
+    if (e.ctrlKey || e.metaKey) {
+      if (ctrlToggleTimer) {
+        clearTimeout(ctrlToggleTimer);
+        ctrlToggleTimer = null;
+      }
+    }
+  });
+  
+  document.addEventListener('keyup', (e) => {
+    if (e.key === 'Control' || e.key === 'Meta') {
+      if (ctrlToggleTimer) {
+        clearTimeout(ctrlToggleTimer);
+        ctrlToggleTimer = null;
+      }
+    }
+  });
+  
+  // Kapat butonu
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      toggleSettingsPanel();
+    });
+  }
+  
+  // Arkaplan fotoğrafı yükleme
+  if (bgImageUploadBtn) {
+    bgImageUploadBtn.addEventListener('click', () => {
+      bgImageInput?.click();
+    });
+  }
+  
+  if (bgImageInput) {
+    bgImageInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file && file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          settings.bgImage = event.target.result;
+          saveSettings();
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+  }
+  
+  // Arkaplan fotoğrafı silme
+  if (bgImageRemoveBtn) {
+    bgImageRemoveBtn.addEventListener('click', () => {
+      if (confirm('Arkaplan fotoğrafını silmek istediğinize emin misiniz?')) {
+        settings.bgImage = null;
+        saveSettings();
+      }
+    });
+  }
+  
+  // Arkaplan rengi değiştirme
+  if (bgColorInput) {
+    bgColorInput.addEventListener('input', (e) => {
+      settings.bgColor = e.target.value;
+      if (bgColorText) {
+        bgColorText.value = e.target.value;
+      }
+      saveSettings();
+    });
+  }
+  
+  if (bgColorText) {
+    bgColorText.addEventListener('change', (e) => {
+      const color = e.target.value;
+      if (/^#[0-9A-F]{6}$/i.test(color)) {
+        settings.bgColor = color;
+        if (bgColorInput) {
+          bgColorInput.value = color;
+        }
+        saveSettings();
+      } else {
+        alert('Geçersiz renk formatı. #RRGGBB formatında girin (örn: #000000)');
+        bgColorText.value = settings.bgColor || '#000000';
+      }
+    });
+  }
+  
+  // Renk presets
+  colorPresets.forEach(preset => {
+    preset.addEventListener('click', () => {
+      const color = preset.getAttribute('data-color');
+      if (color) {
+        settings.bgColor = color;
+        if (bgColorInput) bgColorInput.value = color;
+        if (bgColorText) bgColorText.value = color;
+        saveSettings();
+      }
+    });
+  });
+  
+  // QR kod görüntüsü yükleme
+  if (qrImageUploadBtn) {
+    qrImageUploadBtn.addEventListener('click', () => {
+      qrImageInput?.click();
+    });
+  }
+  
+  if (qrImageInput) {
+    qrImageInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file && file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          settings.qrCodeImage = event.target.result;
+          saveSettings();
+          // QR kod görüntüsünü hemen güncelle
+          generateQRCode();
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+  }
+  
+  // QR kod görüntüsü silme (varsayılana dön)
+  if (qrImageRemoveBtn) {
+    qrImageRemoveBtn.addEventListener('click', () => {
+      if (confirm('QR kod görüntüsünü varsayılana döndürmek istediğinize emin misiniz?')) {
+        settings.qrCodeImage = null;
+        saveSettings();
+        // QR kod görüntüsünü hemen güncelle
+        generateQRCode();
+      }
+    });
+  }
+  
+  // Tüm fotoğrafları sil butonu
+  const deleteAllPhotosBtn = document.getElementById('delete-all-photos');
+  if (deleteAllPhotosBtn) {
+    deleteAllPhotosBtn.addEventListener('click', async () => {
+      if (confirm('TÜM fotoğrafları silmek istediğinize emin misiniz?\n\nBu işlem geri alınamaz ve sunucudaki tüm fotoğraflar kalıcı olarak silinecektir!')) {
+        await deleteAllPhotos();
+      }
+    });
+  }
+  
+  updateBgImagePreview();
+  updateQRCodePreview();
 }
 
 // Uygulama başlatıldığında
-document.addEventListener('DOMContentLoaded', initialize);
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('DOM yüklendi');
+  
+  // Ayarları başlat
+  initSettings();
+  
+  // Uygulamayı başlat (QR kod görüntüsü frame.png olarak yüklenecek)
+  initialize();
+});
 
-// Klavye kısayolları (isteğe bağlı)
+// Klavye kısayolları (slideshow navigasyonu)
 document.addEventListener('keydown', (e) => {
+  if (photos.length === 0) return;
+  
+  const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+  if (totalPages <= 1) return; // Tek sayfa varsa navigasyon yok
+  
   if (e.key === 'ArrowLeft') {
-    if (photos.length > 0) {
-      currentIndex = (currentIndex - 1 + photos.length) % photos.length;
-      showPhoto(currentIndex);
-      // Interval'i sıfırla
-      if (slideInterval) {
-        clearInterval(slideInterval);
-        startSlideshow();
-      }
+    // Önceki sayfa
+    currentPageIndex = (currentPageIndex - 1 + totalPages) % totalPages;
+    showPhotoPage(currentPageIndex);
+    // Timer'ı sıfırla ve yeniden başlat (5 saniye sayacı sıfırlanır)
+    if (slideInterval) {
+      clearTimeout(slideInterval);
+      clearInterval(slideInterval);
     }
+    scheduleNextPage();
   } else if (e.key === 'ArrowRight') {
-    if (photos.length > 0) {
-      currentIndex = (currentIndex + 1) % photos.length;
-      showPhoto(currentIndex);
-      // Interval'i sıfırla
-      if (slideInterval) {
-        clearInterval(slideInterval);
-        startSlideshow();
-      }
+    // Sonraki sayfa
+    currentPageIndex = (currentPageIndex + 1) % totalPages;
+    showPhotoPage(currentPageIndex);
+    // Timer'ı sıfırla ve yeniden başlat (5 saniye sayacı sıfırlanır)
+    if (slideInterval) {
+      clearTimeout(slideInterval);
+      clearInterval(slideInterval);
     }
+    scheduleNextPage();
   }
 });

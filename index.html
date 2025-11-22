@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>M3 Foto - Fotoğraf Slayt Gösterimi</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -14,7 +14,7 @@
         <p>Fotoğraflar yükleniyor...</p>
       </div>
       <div id="slideshow" class="slideshow">
-        <img id="slide-image" src="" alt="Fotoğraf" class="slide-image">
+        <div id="photo-grid" class="photo-grid"></div>
       </div>
       <div id="no-photos" class="no-photos" style="display: none;">
         <p>Henüz fotoğraf yüklenmedi</p>
@@ -25,29 +25,75 @@
     <!-- Sağ taraf: QR Kod ve Branding (15%) -->
     <div class="sidebar-section">
       <div class="sidebar-content">
-        <div class="branding">
-          <h1 class="brand-name">M3 Foto</h1>
-          <p class="brand-tagline">Anınızı Paylaşın</p>
-        </div>
         
         <div class="qr-container">
-          <h2 class="qr-title">Fotoğraf Yükle</h2>
+          
           <div id="qr-code" class="qr-code"></div>
-          <p class="qr-instruction">
-            Telefonunuzla QR kodu okutun ve fotoğrafınızı yükleyin
-          </p>
+          
         </div>
 
-        <div class="info-section">
-          <p class="photo-count">
-            <span id="photo-count">0</span> fotoğraf yüklendi
-          </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ayarlar Paneli -->
+  <div id="settings-panel" class="settings-panel">
+    <div class="settings-content">
+      <div class="settings-header">
+        <h2>⚙️ Ayarlar</h2>
+        <button id="close-settings" class="close-btn">&times;</button>
+      </div>
+      
+      <div class="settings-body">
+        <!-- Arkaplan Fotoğrafı -->
+        <div class="setting-group">
+          <label class="setting-label">Arkaplan Fotoğrafı</label>
+          <div class="setting-controls">
+            <input type="file" id="bg-image-input" accept="image/*" style="display: none;">
+            <button id="bg-image-upload" class="btn-setting">📁 Fotoğraf Yükle</button>
+            <button id="bg-image-remove" class="btn-setting btn-danger">🗑️ Sil</button>
+          </div>
+          <div id="bg-image-preview" class="bg-preview"></div>
+        </div>
+
+        <!-- Arkaplan Rengi -->
+        <div class="setting-group">
+          <label class="setting-label">Arkaplan Rengi</label>
+          <div class="setting-controls">
+            <input type="color" id="bg-color-input" value="#000000" class="color-input">
+            <input type="text" id="bg-color-text" value="#000000" class="color-text" placeholder="#000000">
+          </div>
+          <div class="color-presets">
+            <button class="color-preset" data-color="#000000" style="background: #000000;"></button>
+            <button class="color-preset" data-color="#1a1a1a" style="background: #1a1a1a;"></button>
+            <button class="color-preset" data-color="#ffffff" style="background: #ffffff; border: 1px solid #ccc;"></button>
+            <button class="color-preset" data-color="#1a1a2e" style="background: #1a1a2e;"></button>
+            <button class="color-preset" data-color="#16213e" style="background: #16213e;"></button>
+          </div>
+        </div>
+
+        <!-- QR Kod Görüntüsü -->
+        <div class="setting-group">
+          <label class="setting-label">QR Kod Görüntüsü</label>
+          <div class="setting-controls">
+            <input type="file" id="qr-image-input" accept="image/*" style="display: none;">
+            <button id="qr-image-upload" class="btn-setting">📁 QR Kod Yükle</button>
+            <button id="qr-image-remove" class="btn-setting btn-danger">🗑️ Varsayılana Dön</button>
+          </div>
+          <div id="qr-image-preview" class="bg-preview"></div>
+        </div>
+
+        <!-- Tüm Fotoğrafları Sil -->
+        <div class="setting-group">
+          <label class="setting-label">Fotoğraf Yönetimi</label>
+          <div class="setting-controls">
+            <button id="delete-all-photos" class="btn-setting btn-danger btn-full">🗑️ Tüm Fotoğrafları Sil</button>
+          </div>
         </div>
       </div>
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

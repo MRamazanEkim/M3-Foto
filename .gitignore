@@ -10,3 +10,4 @@ build/
 *.dmg
 *.app
 out/
+setup_script.iss
