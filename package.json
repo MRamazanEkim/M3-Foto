@@ -1,5 +1,5 @@
 {
-  "name": "m3-foto",
+  "name": "M3_Foto",
   "version": "1.0.0",
   "description": "QR kod ile foto yükleme ve slideshow gösterimi uygulaması",
   "main": "main.js",
@@ -17,8 +17,17 @@
   "author": "",
   "license": "MIT",
   "build": {
+    "appId": "com.m3.foto",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "app_icon.ico"
+    },
     "asar": true
   },
+
+  
   "dependencies": {
     "@aws-sdk/client-s3": "^3.490.0",
     "cors": "^2.8.5",
