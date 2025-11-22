@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>M3 Foto - Fotoğraf Slayt Gösterimi</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Sol taraf: Fotoğraf slayt gösterimi (85%) -->
+    <div class="slideshow-section">
+      <div id="loading" class="loading">
+        <p>Fotoğraflar yükleniyor...</p>
+      </div>
+      <div id="slideshow" class="slideshow">
+        <img id="slide-image" src="" alt="Fotoğraf" class="slide-image">
+      </div>
+      <div id="no-photos" class="no-photos" style="display: none;">
+        <p>Henüz fotoğraf yüklenmedi</p>
+        <p class="subtitle">QR kod ile fotoğraf yükleyin</p>
+      </div>
+    </div>
+
+    <!-- Sağ taraf: QR Kod ve Branding (15%) -->
+    <div class="sidebar-section">
+      <div class="sidebar-content">
+        <div class="branding">
+          <h1 class="brand-name">M3 Foto</h1>
+          <p class="brand-tagline">Anınızı Paylaşın</p>
+        </div>
+        
+        <div class="qr-container">
+          <h2 class="qr-title">Fotoğraf Yükle</h2>
+          <div id="qr-code" class="qr-code"></div>
+          <p class="qr-instruction">
+            Telefonunuzla QR kodu okutun ve fotoğrafınızı yükleyin
+          </p>
+        </div>
+
+        <div class="info-section">
+          <p class="photo-count">
+            <span id="photo-count">0</span> fotoğraf yüklendi
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

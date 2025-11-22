@@ -1,0 +1,12 @@
+node_modules/
+uploads/
+*.log
+.DS_Store
+.env
+.env.local
+dist/
+build/
+*.exe
+*.dmg
+*.app
+out/

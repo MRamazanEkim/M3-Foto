@@ -1,0 +1,25 @@
+{
+  "name": "m3-foto",
+  "version": "1.0.0",
+  "description": "QR kod ile foto yükleme ve slideshow gösterimi uygulaması",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "server": "node server.js",
+    "dev": "concurrently \"npm run server\" \"npm start\""
+  },
+  "keywords": ["electron", "photo", "slideshow", "qr-code"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "cors": "^2.8.5",
+    "@aws-sdk/client-s3": "^3.490.0",
+    "qrcode": "^1.5.3"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "concurrently": "^8.2.2"
+  }
+}
