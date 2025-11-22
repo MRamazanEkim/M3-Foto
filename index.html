@@ -28,7 +28,9 @@
         
         <div class="qr-container">
           
+          <div id="qr-text-top" class="qr-text qr-text-top"></div>
           <div id="qr-code" class="qr-code"></div>
+          <div id="qr-text-bottom" class="qr-text qr-text-bottom"></div>
           
         </div>
 
@@ -81,6 +83,41 @@
             <button id="qr-image-remove" class="btn-setting btn-danger">🗑️ Varsayılana Dön</button>
           </div>
           <div id="qr-image-preview" class="bg-preview"></div>
+        </div>
+
+        <!-- QR Kod Üst Yazısı -->
+        <div class="setting-group">
+          <label class="setting-label">QR Kod Üst Yazısı</label>
+          <div class="setting-controls">
+            <input type="text" id="qr-text-top-input" class="color-text" placeholder="Üst yazıyı buraya girin" style="flex: 1;">
+            <button id="qr-text-top-add" class="btn-setting">✓ Yazı Ekle</button>
+            <button id="qr-text-top-remove" class="btn-setting btn-danger">🗑️ Yazıyı Sil</button>
+          </div>
+        </div>
+
+        <!-- QR Kod Alt Yazısı -->
+        <div class="setting-group">
+          <label class="setting-label">QR Kod Alt Yazısı</label>
+          <div class="setting-controls">
+            <input type="text" id="qr-text-bottom-input" class="color-text" placeholder="Alt yazıyı buraya girin" style="flex: 1;">
+            <button id="qr-text-bottom-add" class="btn-setting">✓ Yazı Ekle</button>
+            <button id="qr-text-bottom-remove" class="btn-setting btn-danger">🗑️ Yazıyı Sil</button>
+          </div>
+        </div>
+
+        <!-- Slayt Geçiş Süresi -->
+        <div class="setting-group">
+          <label class="setting-label">Slayt Geçiş Süresi</label>
+          <div class="setting-controls" style="flex-direction: column; gap: 10px;">
+            <input type="range" id="slide-interval-slider" min="10" max="35" value="10" step="1" style="width: 100%; cursor: pointer;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <input type="number" id="slide-interval-input" min="10" max="35" value="10" step="1" class="color-text" style="width: 80px; text-align: center;">
+              <span style="color: #fff; font-size: 14px;">saniye</span>
+            </div>
+          </div>
+          <p class="setting-hint" style="color: #999; font-size: 12px; margin-top: 8px;">
+            Her 15 fotoğrafın ekranda kalma süresi (10-35 saniye arası)
+          </p>
         </div>
 
         <!-- Tüm Fotoğrafları Sil -->

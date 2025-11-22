@@ -8,18 +8,27 @@
     "server": "node server.js",
     "dev": "concurrently \"npm run server\" \"npm start\""
   },
-  "keywords": ["electron", "photo", "slideshow", "qr-code"],
+  "keywords": [
+    "electron",
+    "photo",
+    "slideshow",
+    "qr-code"
+  ],
   "author": "",
   "license": "MIT",
+  "build": {
+    "asar": true
+  },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.490.0",
+    "cors": "^2.8.5",
     "express": "^4.18.2",
     "multer": "^1.4.5-lts.1",
-    "cors": "^2.8.5",
-    "@aws-sdk/client-s3": "^3.490.0",
     "qrcode": "^1.5.3"
   },
   "devDependencies": {
+    "concurrently": "^8.2.2",
     "electron": "^28.0.0",
-    "concurrently": "^8.2.2"
+    "electron-builder": "^26.0.12"
   }
 }

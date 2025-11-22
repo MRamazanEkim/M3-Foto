@@ -178,10 +178,14 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 20px;
+  gap: 10px;
   flex: 1;
   justify-content: center;
-  padding-top: 320px; /* QR kod'u aşağıya almak için üst boşluk */
+  padding-top: 120px; /* QR kod'u aşağıya almak için üst boşluk */
+  align-self: flex-start;
+  overflow: visible;
+  position: relative;
+  /* QR kod ortada, üst text yakında */
 }
 
 .qr-title {
@@ -209,6 +213,87 @@ body {
   max-width: 100%;
   display: block;
   object-fit: contain;
+}
+
+.qr-text {
+  width: 100%;
+  text-align: center;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 500;
+  padding: 10px 15px;
+  word-wrap: break-word;
+  line-height: 1.4;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex-shrink: 0;
+  flex-grow: 0;
+  /* Scrollbar stili */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+
+.qr-text::-webkit-scrollbar {
+  width: 6px;
+}
+
+.qr-text::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.qr-text::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+.qr-text-top {
+  margin-bottom: 5px;
+  /* Yukarı doğru genişleme - maksimum yükseklik */
+  max-height: 150px;
+  min-height: 0;
+  /* İçerik uzunsa scroll göster */
+  overflow-y: auto;
+  /* QR kod resmine yakın */
+  align-self: center;
+  order: -1;
+}
+
+.qr-text-bottom {
+  margin-top: 10px;
+  /* Aşağıda kalır - maksimum yükseklik */
+  max-height: 120px;
+  min-height: 0;
+  /* İçerik uzunsa scroll göster */
+  overflow-y: auto;
+}
+
+.qr-text:empty {
+  display: none;
+  min-height: 0;
+  max-height: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.qr-code {
+  background: #fff;
+  padding: 15px;
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(14, 165, 233, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  /* QR kod pozisyonunu sabitle - küçülmesin ve büyümesin */
+  flex-shrink: 0;
+  flex-grow: 0;
+  /* QR kod sabit boyutta kalsın ve en altta */
+  align-self: center;
+  order: 0;
+  /* QR kod pozisyonunu koru */
+  position: relative;
+  z-index: 1;
 }
 
 .qr-instruction {
@@ -714,6 +799,78 @@ body {
 .color-text:focus {
   outline: none;
   border-color: rgba(14, 165, 233, 0.8);
+}
+
+/* Range slider stili */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 8px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.2);
+  outline: none;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+input[type="range"]:hover {
+  opacity: 1;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(14, 165, 233, 0.9);
+  cursor: pointer;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  transition: all 0.2s;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: rgba(14, 165, 233, 1);
+  transform: scale(1.1);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(14, 165, 233, 0.9);
+  cursor: pointer;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  transition: all 0.2s;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  background: rgba(14, 165, 233, 1);
+  transform: scale(1.1);
+}
+
+/* Number input stili */
+input[type="number"] {
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  color: #fff;
+  font-size: 14px;
+  font-family: monospace;
+  text-align: center;
+}
+
+input[type="number"]:focus {
+  outline: none;
+  border-color: rgba(14, 165, 233, 0.8);
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  opacity: 1;
+  cursor: pointer;
 }
 
 .color-presets {

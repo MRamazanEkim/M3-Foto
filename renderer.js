@@ -3,7 +3,6 @@ let photos = [];
 let currentPageIndex = 0; // Hangi 15'lik grubu gösteriyoruz
 let slideInterval;
 let serverUrl = '';
-const SLIDE_INTERVAL_MS = 5000; // 5 saniye - Her 15 fotoğraf için 5 saniye
 const PHOTOS_PER_PAGE = 15; // Her sayfada 15 fotoğraf
 const MAX_PHOTOS = 300; // En fazla 300 foto (20 slayt)
 
@@ -11,8 +10,39 @@ const MAX_PHOTOS = 300; // En fazla 300 foto (20 slayt)
 let settings = {
   bgImage: null,
   bgColor: '#000000',
-  qrCodeImage: null // Özel QR kod görüntüsü (base64 veya data URL)
+  qrCodeImage: null, // Özel QR kod görüntüsü (base64 veya data URL)
+  slideInterval: 10, // Slayt geçiş süresi (saniye cinsinden, default: 10 sn)
+  qrTextTop: '', // QR kod üst yazısı
+  qrTextBottom: '' // QR kod alt yazısı
 };
+
+// Slayt geçiş süresini al (saniyeden milisaniyeye çevir)
+function getSlideInterval() {
+  // Önce settings'ten al, yoksa default 10
+  let seconds = settings.slideInterval;
+  
+  // Eğer undefined, null, veya geçersiz bir değerse default kullan
+  if (seconds === undefined || seconds === null || isNaN(seconds)) {
+    seconds = 10;
+    settings.slideInterval = 10; // Default değeri ayarla
+  }
+  
+  // Min 10, max 35 saniye kontrolü - değer aralık dışındaysa düzelt
+  if (seconds < 10 || seconds > 35) {
+    seconds = Math.max(10, Math.min(35, seconds));
+    settings.slideInterval = seconds; // Düzeltilmiş değeri ayarla
+    // localStorage'ı da güncelle
+    try {
+      localStorage.setItem('m3foto_settings', JSON.stringify(settings));
+    } catch (e) {
+      console.error('localStorage güncelleme hatası:', e);
+    }
+  }
+  
+  const ms = seconds * 1000;
+  console.log(`[getSlideInterval] settings.slideInterval=${settings.slideInterval}, clamped=${seconds}, returning ${ms}ms`);
+  return ms; // Milisaniyeye çevir
+}
 
 // Blob URL'leri temizle (memory leak önleme)
 function revokeBlobURLs() {
@@ -44,6 +74,9 @@ async function initialize() {
 
     // QR kod veya sabit PNG QR ekle
     generateQRCode();
+    
+    // QR kod yazılarını güncelle
+    updateQRTexts();
 
     // Önce cache'den hızlı başlangıç (eğer varsa)
     const cacheLoaded = await loadFromCache();
@@ -768,8 +801,11 @@ function startSlideshow() {
 
 // Bir sonraki sayfaya geçmeyi planla
 function scheduleNextPage() {
+  console.log(`🔧 scheduleNextPage() çağrıldı`);
+  
   // Mevcut timer'ı temizle
   if (slideInterval) {
+    console.log(`🧹 Mevcut timer temizleniyor: ${slideInterval}`);
     clearTimeout(slideInterval);
     clearInterval(slideInterval); // Her ihtimale karşı
     slideInterval = null;
@@ -778,25 +814,35 @@ function scheduleNextPage() {
   const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
   
   if (totalPages <= 1) {
-    console.log('Tek sayfa var, otomatik geçiş yapılmayacak');
+    console.log('⚠️ Tek sayfa var, otomatik geçiş yapılmayacak');
     return;
   }
   
   const nextPageIndex = (currentPageIndex + 1) % totalPages;
-  console.log(`Sayfa ${currentPageIndex + 1}/${totalPages} gösteriliyor, tam 5 saniye sonra sayfa ${nextPageIndex + 1}'e geçilecek`);
   
-  // TAM 5 saniye sonra bir sonraki sayfaya geç (timer'ı kaydet)
+  // getSlideInterval() fonksiyonunu çağır ve değeri al
+  console.log(`🔍 getSlideInterval() çağrılıyor... settings.slideInterval=${settings.slideInterval}`);
+  const intervalMs = getSlideInterval();
+  const intervalSeconds = intervalMs / 1000;
+  
+  console.log(`📄 Sayfa ${currentPageIndex + 1}/${totalPages} gösteriliyor, tam ${intervalSeconds} saniye (${intervalMs}ms) sonra sayfa ${nextPageIndex + 1}'e geçilecek`);
+  
+  // Ayarlanan süre sonra bir sonraki sayfaya geç (timer'ı kaydet)
+  console.log(`⏰ setTimeout kuruluyor: ${intervalMs}ms (${intervalSeconds} saniye)`);
   slideInterval = setTimeout(() => {
+    console.log(`⏰ [TIMER ÇALIŞTI] ${intervalSeconds} saniye geçti!`);
+    
     // Timer çalıştığında tekrar kontrol et
     const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
     if (totalPages <= 1) {
+      console.log(`⚠️ [TIMER] Tek sayfa var, iptal ediliyor`);
       slideInterval = null;
       return;
     }
     
     const nextPageIndex = (currentPageIndex + 1) % totalPages;
     
-    console.log(`[TIMER] Sayfa değişiyor: ${currentPageIndex + 1} -> ${nextPageIndex + 1} (toplam ${totalPages} sayfa)`);
+    console.log(`🔄 [TIMER] Sayfa değişiyor: ${currentPageIndex + 1} -> ${nextPageIndex + 1} (toplam ${totalPages} sayfa)`);
     
     // Sayfa değiştir
     showPhotoPage(nextPageIndex);
@@ -806,18 +852,23 @@ function scheduleNextPage() {
     
     // Bir sonraki sayfa geçişini planla (döngüsel - her zaman devam et)
     scheduleNextPage();
-  }, SLIDE_INTERVAL_MS); // Her sayfa için tam 5 saniye
+  }, intervalMs); // Her sayfa için ayarlanan süre kadar
   
-  console.log(`Timer kuruldu: ${SLIDE_INTERVAL_MS}ms (${SLIDE_INTERVAL_MS / 1000}s)`);
+  console.log(`✅ Timer başarıyla kuruldu: ${intervalMs}ms (${intervalSeconds}s) - Timer ID: ${slideInterval}`);
+  console.log(`📌 settings.slideInterval değeri: ${settings.slideInterval}`);
 }
 
 // Slideshow'u durdur
 function stopSlideshow() {
   if (slideInterval) {
+    console.log(`🛑 stopSlideshow() çağrıldı - Timer ID: ${slideInterval}`);
     // setInterval veya setTimeout olabilir
     clearInterval(slideInterval);
     clearTimeout(slideInterval);
     slideInterval = null;
+    console.log(`✅ Timer durduruldu ve null yapıldı`);
+  } else {
+    console.log(`ℹ️ stopSlideshow() çağrıldı ama timer zaten null`);
   }
 }
 
@@ -895,11 +946,32 @@ function loadSettings() {
   const savedSettings = localStorage.getItem('m3foto_settings');
   if (savedSettings) {
     try {
-      settings = JSON.parse(savedSettings);
+      const parsed = JSON.parse(savedSettings);
+      // Mevcut default değerleri koru, localStorage'dan gelen değerlerle birleştir
+      settings = {
+        bgImage: parsed.bgImage !== undefined ? parsed.bgImage : settings.bgImage,
+        bgColor: parsed.bgColor || settings.bgColor || '#000000',
+        qrCodeImage: parsed.qrCodeImage !== undefined ? parsed.qrCodeImage : settings.qrCodeImage,
+        slideInterval: parsed.slideInterval !== undefined && parsed.slideInterval !== null ? parsed.slideInterval : settings.slideInterval || 10,
+        qrTextTop: parsed.qrTextTop !== undefined ? parsed.qrTextTop : settings.qrTextTop || '',
+        qrTextBottom: parsed.qrTextBottom !== undefined ? parsed.qrTextBottom : settings.qrTextBottom || ''
+      };
+      
+      // slideInterval değerini kontrol et ve düzelt (10-35 arası olmalı)
+      if (settings.slideInterval < 10 || settings.slideInterval > 35 || isNaN(settings.slideInterval)) {
+        console.warn(`⚠️ Geçersiz slideInterval değeri: ${settings.slideInterval}, 10'a sıfırlanıyor`);
+        settings.slideInterval = 10;
+      }
+      
+      console.log('📋 Ayarlar yüklendi:', settings);
+      console.log(`⏱️ Slayt geçiş süresi: ${settings.slideInterval} saniye`);
+      
       applySettings();
     } catch (e) {
       console.error('Settings load error:', e);
     }
+  } else {
+    console.log('📋 localStorage\'da ayar yok, default değerler kullanılıyor');
   }
 }
 
@@ -941,7 +1013,40 @@ function applySettings() {
     bgColorText.value = bgColor;
   }
   
+  // Slayt geçiş süresi UI güncelleme
+  const slideIntervalSlider = document.getElementById('slide-interval-slider');
+  const slideIntervalInput = document.getElementById('slide-interval-input');
+  const slideIntervalValue = settings.slideInterval || 10;
+  
+  if (slideIntervalSlider) {
+    slideIntervalSlider.value = slideIntervalValue;
+  }
+  if (slideIntervalInput) {
+    slideIntervalInput.value = slideIntervalValue;
+  }
+  
+  // QR kod yazıları UI güncelleme (input field'ları güncelleme, değerleri gösterme)
+  // Input field'lar boş kalacak, sadece ekrandaki text alanları güncellenecek
+  // Kullanıcı yeni yazı girmek istediğinde input'a yazacak
+  
   updateBgImagePreview();
+  
+  // QR kod yazılarını güncelle (ekrandaki text alanlarını)
+  updateQRTexts();
+}
+
+// QR kod yazılarını güncelle
+function updateQRTexts() {
+  const qrTextTopEl = document.getElementById('qr-text-top');
+  const qrTextBottomEl = document.getElementById('qr-text-bottom');
+  
+  if (qrTextTopEl) {
+    qrTextTopEl.textContent = settings.qrTextTop || '';
+  }
+  
+  if (qrTextBottomEl) {
+    qrTextBottomEl.textContent = settings.qrTextBottom || '';
+  }
 }
 
 // Arkaplan fotoğrafı önizlemesini güncelle
@@ -978,6 +1083,8 @@ function saveSettings() {
   applySettings();
   // QR kod görüntüsü değişmişse güncelle
   updateQRCodePreview();
+  // QR kod yazılarını güncelle
+  updateQRTexts();
   if (settings.qrCodeImage !== undefined) {
     generateQRCode();
   }
@@ -1111,6 +1218,14 @@ function initSettings() {
   const qrImageInput = document.getElementById('qr-image-input');
   const qrImageUploadBtn = document.getElementById('qr-image-upload');
   const qrImageRemoveBtn = document.getElementById('qr-image-remove');
+  const slideIntervalSlider = document.getElementById('slide-interval-slider');
+  const slideIntervalInput = document.getElementById('slide-interval-input');
+  const qrTextTopInput = document.getElementById('qr-text-top-input');
+  const qrTextTopAddBtn = document.getElementById('qr-text-top-add');
+  const qrTextTopRemoveBtn = document.getElementById('qr-text-top-remove');
+  const qrTextBottomInput = document.getElementById('qr-text-bottom-input');
+  const qrTextBottomAddBtn = document.getElementById('qr-text-bottom-add');
+  const qrTextBottomRemoveBtn = document.getElementById('qr-text-bottom-remove');
   
   // CTRL tuşu ile panel açma/kapama
   let ctrlToggleTimer = null;
@@ -1274,6 +1389,156 @@ function initSettings() {
     });
   }
   
+  // Slayt geçiş süresi slider - gerçek zamanlı güncelleme
+  if (slideIntervalSlider) {
+    slideIntervalSlider.addEventListener('input', (e) => {
+      const value = parseInt(e.target.value);
+      console.log(`🔄 Slider değişti: ${value} saniye`);
+      
+      settings.slideInterval = value;
+      if (slideIntervalInput) {
+        slideIntervalInput.value = value;
+      }
+      // localStorage'a kaydet
+      localStorage.setItem('m3foto_settings', JSON.stringify(settings));
+      console.log(`💾 Ayarlar kaydedildi: slideInterval=${settings.slideInterval}`);
+      
+      // ÖNEMLİ: Her zaman mevcut timer'ı durdur (tek sayfa olsa bile eski timer çalışıyor olabilir)
+      console.log(`⏹️ Mevcut timer durduruluyor... (slideInterval=${slideInterval})`);
+      stopSlideshow();
+      
+      // Slideshow timer'ını hemen yeniden başlat (eğer slideshow çalışıyorsa)
+      if (photos.length > 0) {
+        const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+        console.log(`📊 Toplam fotoğraf: ${photos.length}, Toplam sayfa: ${totalPages}`);
+        if (totalPages > 1) {
+          // Yeni süre ile yeniden başlat
+          console.log(`▶️ Yeni timer başlatılıyor... (${value} saniye)`);
+          scheduleNextPage();
+        } else {
+          console.log(`⚠️ Tek sayfa var, timer başlatılmıyor (ama eski timer durduruldu)`);
+        }
+      } else {
+        console.log(`⚠️ Fotoğraf yok, timer başlatılmıyor (ama eski timer durduruldu)`);
+      }
+      
+      console.log(`⏱️ Slayt geçiş süresi değiştirildi: ${value} saniye (${value * 1000}ms)`);
+      console.log(`📌 settings.slideInterval şu an: ${settings.slideInterval}`);
+    });
+  }
+  
+  // Slayt geçiş süresi input - değişiklik sonrası güncelleme
+  if (slideIntervalInput) {
+    slideIntervalInput.addEventListener('change', (e) => {
+      let value = parseInt(e.target.value);
+      // Min 10, max 35 kontrolü
+      if (isNaN(value) || value < 10) value = 10;
+      if (value > 35) value = 35;
+      
+      settings.slideInterval = value;
+      if (slideIntervalSlider) {
+        slideIntervalSlider.value = value;
+      }
+      slideIntervalInput.value = value; // Düzeltilmiş değeri göster
+      
+      // localStorage'a kaydet
+      localStorage.setItem('m3foto_settings', JSON.stringify(settings));
+      
+      // Slideshow timer'ını hemen yeniden başlat (eğer slideshow çalışıyorsa)
+      if (photos.length > 0) {
+        const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+        if (totalPages > 1) {
+          // Mevcut timer'ı durdur
+          stopSlideshow();
+          // Yeni süre ile yeniden başlat
+          scheduleNextPage();
+        }
+      }
+      
+      console.log(`⏱️ Slayt geçiş süresi değiştirildi: ${value} saniye (${value * 1000}ms)`);
+    });
+  }
+  
+  // QR kod üst yazısı ekleme
+  if (qrTextTopAddBtn) {
+    qrTextTopAddBtn.addEventListener('click', () => {
+      const text = qrTextTopInput ? qrTextTopInput.value.trim() : '';
+      settings.qrTextTop = text;
+      saveSettings();
+      // Input'u temizle
+      if (qrTextTopInput) {
+        qrTextTopInput.value = '';
+      }
+    });
+  }
+  
+  // QR kod üst yazısı silme
+  if (qrTextTopRemoveBtn) {
+    qrTextTopRemoveBtn.addEventListener('click', () => {
+      if (confirm('Üst yazıyı silmek istediğinize emin misiniz?')) {
+        settings.qrTextTop = '';
+        saveSettings();
+        // Input'u temizle
+        if (qrTextTopInput) {
+          qrTextTopInput.value = '';
+        }
+      }
+    });
+  }
+  
+  // QR kod üst yazısı input - Enter tuşu ile ekleme
+  if (qrTextTopInput) {
+    qrTextTopInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        const text = qrTextTopInput.value.trim();
+        settings.qrTextTop = text;
+        saveSettings();
+        // Input'u temizle
+        qrTextTopInput.value = '';
+      }
+    });
+  }
+  
+  // QR kod alt yazısı ekleme
+  if (qrTextBottomAddBtn) {
+    qrTextBottomAddBtn.addEventListener('click', () => {
+      const text = qrTextBottomInput ? qrTextBottomInput.value.trim() : '';
+      settings.qrTextBottom = text;
+      saveSettings();
+      // Input'u temizle
+      if (qrTextBottomInput) {
+        qrTextBottomInput.value = '';
+      }
+    });
+  }
+  
+  // QR kod alt yazısı silme
+  if (qrTextBottomRemoveBtn) {
+    qrTextBottomRemoveBtn.addEventListener('click', () => {
+      if (confirm('Alt yazıyı silmek istediğinize emin misiniz?')) {
+        settings.qrTextBottom = '';
+        saveSettings();
+        // Input'u temizle
+        if (qrTextBottomInput) {
+          qrTextBottomInput.value = '';
+        }
+      }
+    });
+  }
+  
+  // QR kod alt yazısı input - Enter tuşu ile ekleme
+  if (qrTextBottomInput) {
+    qrTextBottomInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        const text = qrTextBottomInput.value.trim();
+        settings.qrTextBottom = text;
+        saveSettings();
+        // Input'u temizle
+        qrTextBottomInput.value = '';
+      }
+    });
+  }
+  
   // Tüm fotoğrafları sil butonu
   const deleteAllPhotosBtn = document.getElementById('delete-all-photos');
   if (deleteAllPhotosBtn) {
@@ -1286,6 +1551,7 @@ function initSettings() {
   
   updateBgImagePreview();
   updateQRCodePreview();
+  updateQRTexts();
 }
 
 // Uygulama başlatıldığında
