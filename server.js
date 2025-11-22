@@ -6,171 +6,162 @@ const cors = require("cors");
 const fs = require("fs");
 const crypto = require("crypto");
 
-const USE_S3 = process.env.USE_S3 === "true";
-
 const app = express();
 
-// Middleware
+// -----------------------
+// CONFIG
+// -----------------------
+const UPLOAD_DIR = process.env.UPLOAD_DIR || "/uploads"; // Persistent Disk
+const MAX_FILE_SIZE_MB = 10 * 1024 * 1024; // 10 MB
+
+// -----------------------
+// MIDDLEWARE
+// -----------------------
 app.use(cors());
-app.use(express.json()); // JSON body parser
-app.use(express.urlencoded({ extended: true })); // URL encoded body parser
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
-// güvenlik: upload boyutu ve tür kısıtla
-const maxFileSize = 10 * 1024 * 1024; // 10 MB
+// Ensure upload directory exists (Render Persistent Disk creates it but we double-check)
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
 
-// Multer storage — local fallback (used only if !USE_S3)
+// -----------------------
+// MULTER STORAGE (LOCAL)
+// -----------------------
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = "uploads";
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-    cb(null, dir);
-  },
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
     const rnd = Date.now() + "-" + crypto.randomBytes(4).toString("hex");
     cb(null, rnd + path.extname(file.originalname));
   }
 });
 
+const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
 const fileFilter = (req, file, cb) => {
-  const allowed = ["image/jpeg","image/png","image/webp","image/gif"];
-  if (!allowed.includes(file.mimetype)) return cb(new Error("Yalnızca resim yüklenebilir"), false);
+  if (!allowedTypes.includes(file.mimetype))
+    return cb(new Error("Yalnızca resim dosyası yüklenebilir"));
   cb(null, true);
 };
 
-const upload = multer({ storage, limits: { fileSize: maxFileSize }, fileFilter });
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: MAX_FILE_SIZE_MB }
+});
 
-// If using S3, we will not use multer diskStorage to keep memory low; multer.memoryStorage to get buffer
-const uploadMemory = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxFileSize }, fileFilter });
+// -----------------------
+// ROUTES
+// -----------------------
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "upload.html"));
+});
 
-// S3 setup (AWS SDK v3)
-let s3Client;
-if (USE_S3) {
-  const { S3Client, PutObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
-  s3Client = new S3Client({
-    region: process.env.AWS_REGION,
-    credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-    }
+// Handle photo upload (local only)
+app.post("/upload", upload.single("photo"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ ok: false, error: "Dosya yüklenmedi" });
+  }
+  return res.json({
+    ok: true,
+    url: `${getBaseUrl(req)}/uploads/${req.file.filename}`
   });
-  app.set("s3", { S3Client, PutObjectCommand, ListObjectsV2Command });
-}
+});
 
-// Routes
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "upload.html")));
-
-app.post("/upload", USE_S3 ? uploadMemory.single("photo") : upload.single("photo"), async (req, res) => {
+// List all uploaded photos
+app.get("/photos", (req, res) => {
   try {
-    // Dosya kontrolü
-    if (!req.file) {
-      return res.status(400).json({ ok: false, error: "Dosya yüklenmedi" });
-    }
+    if (!fs.existsSync(UPLOAD_DIR)) return res.json([]);
 
-    if (USE_S3) {
-      // upload to S3
-      const { PutObjectCommand } = app.get("s3");
-      const bucket = process.env.S3_BUCKET;
-      if (!bucket) throw new Error("S3_BUCKET env yok");
+    const files = fs.readdirSync(UPLOAD_DIR);
 
-      const key = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}${path.extname(req.file.originalname)}`;
-      const params = {
-        Bucket: bucket,
-        Key: key,
-        Body: req.file.buffer,
-        ContentType: req.file.mimetype,
-        ACL: "public-read"
+    const items = files.map(f => {
+      const filePath = path.join(UPLOAD_DIR, f);
+      const stats = fs.statSync(filePath);
+      return {
+        url: `${getBaseUrl(req)}/uploads/${f}`,
+        file: f,
+        lastModified: stats.mtime.toISOString()
       };
+    });
 
-      await s3Client.send(new PutObjectCommand(params));
-      const url = `https://${bucket}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
-      return res.json({ ok: true, url });
-    } else {
-      // local upload done by multer
-      return res.json({ ok: true, url: `/uploads/${req.file.filename}` });
-    }
+    return res.json(items);
   } catch (err) {
     console.error(err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// Health check endpoint (Render için)
+// Foto silme (tüm fotoğrafları toplu silme) - /uploads'tan ÖNCE tanımlanmalı
+app.delete("/delete_all", (req, res) => {
+  try {
+    console.log('DELETE /delete_all çağrıldı');
+    
+    if (!fs.existsSync(UPLOAD_DIR)) {
+      return res.json({ ok: true, message: "Zaten hiç fotoğraf yok" });
+    }
+
+    const files = fs.readdirSync(UPLOAD_DIR);
+    console.log(`${files.length} fotoğraf silinecek`);
+
+    files.forEach(f => {
+      const filePath = path.join(UPLOAD_DIR, f);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log(`Silindi: ${f}`);
+      }
+    });
+
+    return res.json({ ok: true, message: "Tüm fotoğraflar silindi" });
+  } catch (err) {
+    console.error('Delete all error:', err);
+    return res.status(500).json({ ok: false, error: "Toplu silme hatası: " + err.message });
+  }
+});
+
+// Serve uploaded files (static middleware en sona alındı - route'lardan sonra)
+app.use("/uploads", express.static(UPLOAD_DIR));
+
+// Render Health Check
 app.get("/health", (req, res) => {
-  res.json({ 
-    ok: true, 
+  res.json({
+    ok: true,
     status: "healthy",
     timestamp: new Date().toISOString(),
-    useS3: USE_S3
+    persistentDisk: UPLOAD_DIR
   });
 });
 
-// /photos endpoint: list photos (absolute URLs)
-app.get("/photos", async (req, res) => {
-  try {
-    if (USE_S3) {
-      const { ListObjectsV2Command } = app.get("s3");
-      const bucket = process.env.S3_BUCKET;
-      const list = await s3Client.send(new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1000 }));
-      const items = (list.Contents || []).map(o => ({
-        url: `https://${bucket}.s3.${process.env.AWS_REGION}.amazonaws.com/${o.Key}`,
-        key: o.Key,
-        lastModified: o.LastModified
-      }));
-      return res.json(items);
-    } else {
-      const dir = path.join(__dirname, "uploads");
-      if (!fs.existsSync(dir)) return res.json([]);
-      const files = fs.readdirSync(dir).map(f => ({
-        url: `${getBaseUrl(req)}/uploads/${f}`,
-        file: f
-      }));
-      return res.json(files);
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// serve uploads statically (local)
-if (!USE_S3) app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error("Error:", err);
-  
-  // Multer error handling
-  if (err instanceof multer.MulterError) {
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ ok: false, error: "Dosya boyutu 10MB'dan büyük olamaz" });
-    }
-    return res.status(400).json({ ok: false, error: err.message });
-  }
-  
-  // Generic error handling
-  res.status(500).json({ 
-    ok: false, 
-    error: err.message || "Sunucu hatası" 
-  });
-});
-
-// 404 handler
+// 404
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: "Endpoint bulunamadı" });
 });
 
-// Helper
+// Error handler
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ ok: false, error: err.message });
+});
+
+// -----------------------
+// UTIL
+// -----------------------
 function getBaseUrl(req) {
   const proto = req.headers["x-forwarded-proto"] || req.protocol;
   return `${proto}://${req.get("host")}`;
 }
 
-// Start
+// -----------------------
+// START SERVER
+// -----------------------
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || "0.0.0.0"; // Render için 0.0.0.0 gerekli
+// Render'da 0.0.0.0, local development'te localhost
+const HOST = process.env.NODE_ENV === 'production' ? "0.0.0.0" : "localhost";
 
 app.listen(PORT, HOST, () => {
-  console.log(`Server listening on ${HOST}:${PORT} (USE_S3=${USE_S3})`);
-  console.log(`Health check: http://${HOST}:${PORT}/health`);
+  console.log(`Server running on http://${HOST}:${PORT}`);
+  console.log(`Upload dir: ${UPLOAD_DIR}`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
 });
