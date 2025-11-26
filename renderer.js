@@ -1,9 +1,9 @@
 // renderer.js - Electron Renderer Process
 let photos = [];
-let currentPageIndex = 0; // Hangi 15'lik grubu gösteriyoruz
+let currentPageIndex = 0; // Hangi 18'lik grubu gösteriyoruz
 let slideInterval;
 let serverUrl = '';
-const PHOTOS_PER_PAGE = 15; // Her sayfada 15 fotoğraf
+const PHOTOS_PER_PAGE = 18; // Her sayfada 18 fotoğraf (6x3 grid)
 const MAX_PHOTOS = 300; // En fazla 300 foto (20 slayt)
 
 // Ayarlar
@@ -502,6 +502,43 @@ async function clearAllCachedPhotos() {
   }
 }
 
+// IndexedDB'den tüm cache'lenmiş fotoğrafları blob olarak al
+async function getAllCachedPhotos() {
+  try {
+    const db = await openDB();
+    const transaction = db.transaction([STORE_PHOTOS], 'readonly');
+    const store = transaction.objectStore(STORE_PHOTOS);
+    
+    const request = store.getAll();
+    const cachedPhotos = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+    
+    if (cachedPhotos && cachedPhotos.length > 0) {
+      // Son değiştirilme tarihine göre sırala (en yeni önce)
+      cachedPhotos.sort((a, b) => {
+        const dateA = new Date(a.lastModified || a.cachedAt || 0);
+        const dateB = new Date(b.lastModified || b.cachedAt || 0);
+        return dateB - dateA;
+      });
+      
+      // Blob ve URL bilgisiyle birlikte döndür
+      return cachedPhotos.map(photo => ({
+        blob: photo.blob,
+        url: photo.url,
+        lastModified: photo.lastModified || photo.cachedAt || new Date().toISOString(),
+        id: photo.id
+      })).filter(photo => photo.blob !== null && photo.blob !== undefined);
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('❌ Tüm cache\'lenmiş fotoğrafları alma hatası:', error);
+    return [];
+  }
+}
+
 // ============================================
 // QR Kod görüntüsünü yükle (frame.png veya özel görüntü)
 // ============================================
@@ -920,7 +957,7 @@ function showPhotoPage(pageIndex) {
       gridContainer.appendChild(photoItem);
     });
     
-    // 15'ten az fotoğraf varsa boş placeholder ekle
+    // 18'den az fotoğraf varsa boş placeholder ekle
     for (let i = pagePhotos.length; i < PHOTOS_PER_PAGE; i++) {
       const emptyItem = document.createElement('div');
       emptyItem.className = 'photo-item';
@@ -1191,6 +1228,139 @@ async function deleteAllPhotos() {
     if (deleteBtn) {
       deleteBtn.disabled = false;
       deleteBtn.textContent = '🗑️ Tüm Fotoğrafları Sil';
+    }
+  }
+}
+
+// Tüm cache'lenmiş fotoğrafları bilgisayara kaydet
+async function saveAllPhotos() {
+  try {
+    console.log('💾 Tüm fotoğraflar kaydediliyor...');
+    
+    // IndexedDB'den tüm fotoğrafları al
+    const cachedPhotos = await getAllCachedPhotos();
+    
+    if (!cachedPhotos || cachedPhotos.length === 0) {
+      alert('Kaydedilecek fotoğraf bulunamadı.\n\nLütfen önce fotoğrafların yüklenmesini bekleyin.');
+      return;
+    }
+    
+    // Electron API kontrolü
+    if (!window.electronAPI || !window.electronAPI.selectFolder || !window.electronAPI.writePhotoFile) {
+      alert('Fotoğraf kaydetme özelliği mevcut değil.\n\nBu özellik sadece Electron uygulamasında çalışır.');
+      return;
+    }
+    
+    // Klasör seçme dialog'u
+    const selectedFolder = await window.electronAPI.selectFolder();
+    
+    if (!selectedFolder) {
+      console.log('Klasör seçimi iptal edildi');
+      return;
+    }
+    
+    console.log('Seçilen klasör:', selectedFolder);
+    console.log(`Toplam ${cachedPhotos.length} fotoğraf kaydedilecek...`);
+    
+    const saveBtn = document.getElementById('save-all-photos');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = `⏳ Kaydediliyor... (0/${cachedPhotos.length})`;
+    }
+    
+    let successCount = 0;
+    let errorCount = 0;
+    
+    // Her fotoğrafı kaydet
+    for (let i = 0; i < cachedPhotos.length; i++) {
+      const photo = cachedPhotos[i];
+      
+      try {
+        // Dosya adı oluştur (URL'den veya timestamp'ten)
+        let fileName = '';
+        
+        if (photo.url) {
+          // URL'den dosya adını çıkar
+          const urlParts = photo.url.split('/');
+          const urlFileName = urlParts[urlParts.length - 1];
+          
+          // Query string'i temizle
+          const cleanFileName = urlFileName.split('?')[0];
+          
+          if (cleanFileName && cleanFileName.length > 0 && cleanFileName.includes('.')) {
+            fileName = cleanFileName;
+          } else {
+            // URL'den dosya adı çıkarılamazsa timestamp kullan
+            const extension = photo.blob.type ? photo.blob.type.split('/')[1] : 'jpg';
+            const timestamp = new Date(photo.lastModified).getTime();
+            fileName = `photo_${timestamp}.${extension}`;
+          }
+        } else {
+          // URL yoksa timestamp kullan
+          const extension = photo.blob.type ? photo.blob.type.split('/')[1] : 'jpg';
+          const timestamp = new Date(photo.lastModified).getTime();
+          fileName = `photo_${timestamp}.${extension}`;
+        }
+        
+        // Geçersiz karakterleri temizle
+        fileName = fileName.replace(/[<>:"/\\|?*]/g, '_');
+        
+        // Dosya yolu oluştur
+        const filePath = `${selectedFolder}/${fileName}`;
+        
+        // Blob'u ArrayBuffer'a çevir
+        const arrayBuffer = await photo.blob.arrayBuffer();
+        
+        // Buffer'ı Uint8Array'e çevir
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        // Dosyayı yaz
+        const result = await window.electronAPI.writePhotoFile(filePath, Array.from(uint8Array));
+        
+        if (result && result.success) {
+          successCount++;
+          console.log(`✓ Kaydedildi (${i + 1}/${cachedPhotos.length}): ${fileName}`);
+        } else {
+          errorCount++;
+          console.error(`❌ Kaydedilemedi (${i + 1}/${cachedPhotos.length}): ${fileName}`, result?.error);
+        }
+        
+        // Progress güncelle
+        if (saveBtn) {
+          saveBtn.textContent = `⏳ Kaydediliyor... (${i + 1}/${cachedPhotos.length})`;
+        }
+        
+        // UI'yi güncellemek için kısa bir bekleme
+        await new Promise(resolve => setTimeout(resolve, 10));
+        
+      } catch (error) {
+        errorCount++;
+        console.error(`❌ Fotoğraf kaydetme hatası (${i + 1}/${cachedPhotos.length}):`, error);
+      }
+    }
+    
+    // Sonuç mesajı
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '💾 Tüm Fotoları Kaydet';
+    }
+    
+    if (errorCount === 0) {
+      alert(`✓ Tüm fotoğraflar başarıyla kaydedildi!\n\nToplam: ${successCount} fotoğraf\nKlasör: ${selectedFolder}`);
+    } else {
+      alert(`Fotoğraflar kaydedildi (bazı hatalar olabilir):\n\n✓ Başarılı: ${successCount}\n❌ Hatalı: ${errorCount}\n\nKlasör: ${selectedFolder}`);
+    }
+    
+    console.log(`✓ Fotoğraf kaydetme tamamlandı: ${successCount} başarılı, ${errorCount} hatalı`);
+    
+  } catch (error) {
+    console.error('❌ Fotoğrafları kaydetme hatası:', error);
+    alert('Fotoğraflar kaydedilirken bir hata oluştu: ' + (error.message || error));
+    
+    const saveBtn = document.getElementById('save-all-photos');
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '💾 Tüm Fotoları Kaydet';
     }
   }
 }
@@ -1546,6 +1716,14 @@ function initSettings() {
       if (confirm('TÜM fotoğrafları silmek istediğinize emin misiniz?\n\nBu işlem geri alınamaz ve sunucudaki tüm fotoğraflar kalıcı olarak silinecektir!')) {
         await deleteAllPhotos();
       }
+    });
+  }
+  
+  // Tüm fotoğrafları kaydet butonu
+  const saveAllPhotosBtn = document.getElementById('save-all-photos');
+  if (saveAllPhotosBtn) {
+    saveAllPhotosBtn.addEventListener('click', async () => {
+      await saveAllPhotos();
     });
   }
   

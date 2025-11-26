@@ -20,10 +20,10 @@ body {
   background: transparent;
 }
 
-/* Sol taraf: Slideshow (85%) */
+/* Slideshow (tam ekran) */
 .slideshow-section {
-  flex: 0 0 80%;
-  width: 80%;
+  flex: 1;
+  width: 100%;
   height: 100vh;
   position: relative;
   background: transparent;
@@ -43,7 +43,7 @@ body {
 
 .photo-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   grid-template-rows: repeat(3, 1fr);
   gap: 15px;
   width: 100%;
@@ -128,18 +128,7 @@ body {
   margin-top: 10px;
 }
 
-/* Sağ taraf: Sidebar (15%) */
-.sidebar-section {
-  flex: 0 0 20%;
-  width: 20%;
-  height: 100vh;
-  background: transparent;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: space-between;
-  padding: 30px 20px;
-}
+/* Sidebar kaldırıldı - artık kullanılmıyor */
 
 .sidebar-content {
   width: 100%;
@@ -366,44 +355,16 @@ body {
   }
   
   .slideshow-section {
-    flex: 0 0 70%;
+    flex: 1;
     width: 100%;
-    height: 70vh;
+    height: 100vh;
   }
   
   .photo-grid {
-    grid-template-columns: repeat(4, 1fr);
-    grid-template-rows: repeat(4, 1fr);
+    grid-template-columns: repeat(6, 1fr);
+    grid-template-rows: repeat(3, 1fr);
     gap: 10px;
     padding: 15px;
-  }
-  
-  .sidebar-section {
-    flex: 0 0 30%;
-    width: 100%;
-    height: 30vh;
-    flex-direction: row;
-    padding: 15px;
-  }
-  
-  .sidebar-content {
-    flex-direction: row;
-    justify-content: center;
-    align-items: center;
-    gap: 30px;
-  }
-  
-  .qr-container {
-    flex: 0 0 auto;
-  }
-  
-  .qr-code {
-    max-width: 200px;
-    padding: 10px;
-  }
-  
-  .brand-name {
-    font-size: 20px;
   }
   
   .loading p, .no-photos p {
@@ -422,48 +383,16 @@ body {
   }
   
   .slideshow-section {
-    flex: 0 0 60%;
+    flex: 1;
     width: 100%;
-    height: 60vh;
+    height: 100vh;
   }
   
   .photo-grid {
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
+    grid-template-rows: repeat(3, 1fr);
     gap: 8px;
     padding: 10px;
-  }
-  
-  .sidebar-section {
-    flex: 0 0 40%;
-    width: 100%;
-    height: 40vh;
-    flex-direction: row;
-    padding: 10px;
-  }
-  
-  .sidebar-content {
-    flex-direction: row;
-    justify-content: center;
-    align-items: center;
-    gap: 20px;
-  }
-  
-  .qr-container {
-    flex: 0 0 auto;
-  }
-  
-  .qr-code {
-    max-width: 180px;
-    padding: 8px;
-  }
-  
-  .brand-name {
-    font-size: 18px;
-  }
-  
-  .qr-title {
-    font-size: 14px;
   }
   
   .loading p, .no-photos p {
@@ -483,29 +412,14 @@ body {
   }
   
   .slideshow-section {
-    flex: 0 0 55%;
+    flex: 1;
     width: 100%;
-    height: 55vh;
+    height: 100vh;
   }
   
-  .sidebar-section {
-    flex: 0 0 45%;
-    width: 100%;
-    height: 45vh;
-    padding: 10px;
-  }
-  
-  .sidebar-content {
-    gap: 15px;
-  }
-  
-  .qr-code {
-    max-width: 150px;
-    padding: 8px;
-  }
-  
-  .brand-name {
-    font-size: 16px;
+  .photo-grid {
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-rows: repeat(4, 1fr);
   }
   
   .loading p, .no-photos p {
@@ -538,33 +452,14 @@ body {
   }
   
   .slideshow-section {
-    flex: 0 0 50%;
+    flex: 1;
     width: 100%;
-    height: 50vh;
+    height: 100vh;
   }
   
-  .sidebar-section {
-    flex: 0 0 50%;
-    width: 100%;
-    height: 50vh;
-    padding: 8px;
-  }
-  
-  .sidebar-content {
-    gap: 10px;
-  }
-  
-  .qr-code {
-    max-width: 120px;
-    padding: 6px;
-  }
-  
-  .brand-name {
-    font-size: 14px;
-  }
-  
-  .qr-title {
-    font-size: 12px;
+  .photo-grid {
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(5, 1fr);
   }
   
   .loading p, .no-photos p {
@@ -602,33 +497,20 @@ body {
 /* Dikey ekranlar (Portrait mode) - Aspect ratio kontrolü */
 @media (orientation: portrait) and (max-height: 900px) {
   .slideshow-section {
-    flex: 0 0 65%;
-    height: 65vh;
-  }
-  
-  .sidebar-section {
-    flex: 0 0 35%;
-    height: 35vh;
+    flex: 1;
+    height: 100vh;
   }
 }
 
 /* Yatay ekranlar (Landscape mode) */
 @media (orientation: landscape) and (max-height: 600px) {
   .slideshow-section {
-    flex: 0 0 75%;
+    flex: 1;
   }
   
-  .sidebar-section {
-    flex: 0 0 25%;
-  }
-  
-  .sidebar-content {
-    gap: 15px;
-  }
-  
-  .qr-code {
-    max-width: 150px;
-    padding: 10px;
+  .photo-grid {
+    grid-template-columns: repeat(6, 1fr);
+    grid-template-rows: repeat(3, 1fr);
   }
 }
 

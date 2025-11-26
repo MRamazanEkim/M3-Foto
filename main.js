@@ -1,8 +1,9 @@
 // main.js - Electron Main Process
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
-const fs = require('fs');
+const fs = require('fs').promises;
+const fsSync = require('fs');
 const http = require('http');
 
 let mainWindow;
@@ -11,7 +12,7 @@ let serverProcess;
 // Config dosyasını yükle (varsa)
 let serverConfig = null;
 const configPath = path.join(__dirname, 'config.js');
-if (fs.existsSync(configPath)) {
+if (fsSync.existsSync(configPath)) {
   try {
     serverConfig = require(configPath);
   } catch (err) {
@@ -204,4 +205,41 @@ ipcMain.handle('get-server-url', async () => {
   // const localUrl = `http://localhost:${port}`;
   // console.log('Server URL (localhost):', localUrl);
   // return localUrl;
+});
+
+// IPC: Klasör seçme dialog'u
+ipcMain.handle('select-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Fotoğrafları kaydetmek için klasör seçin'
+  });
+  
+  if (result.canceled) {
+    return null;
+  }
+  
+  return result.filePaths[0];
+});
+
+// IPC: Fotoğraf dosyasını diske yaz
+ipcMain.handle('write-photo-file', async (event, filePath, buffer) => {
+  try {
+    // Buffer'ı Uint8Array'e dönüştür (electron IPC'den gelen buffer'ları handle etmek için)
+    let data;
+    if (Buffer.isBuffer(buffer)) {
+      data = buffer;
+    } else if (buffer instanceof ArrayBuffer) {
+      data = Buffer.from(buffer);
+    } else if (Array.isArray(buffer)) {
+      data = Buffer.from(buffer);
+    } else {
+      data = Buffer.from(buffer);
+    }
+    
+    await fs.writeFile(filePath, data);
+    return { success: true };
+  } catch (error) {
+    console.error('Dosya yazma hatası:', error);
+    return { success: false, error: error.message };
+  }
 });
