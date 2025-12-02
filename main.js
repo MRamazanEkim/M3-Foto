@@ -5,10 +5,64 @@ const { spawn } = require('child_process');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const http = require('http');
+const https = require('https');
 
 let mainWindow;
 let serverProcess;
+let passwordWindow;
+let appStarted = false; // Ana uygulamanın birden fazla kez başlatılmasını engelle
 
+// ================================
+// ŞİFRE KONTROL MEKANİZMASI
+// ================================
+
+const PASSWORD_URL = 'https://www.m3.com.tr/gamepass.txt';
+
+// AppData/Roaming/<AppName>/saved_password.dat yolu
+function getPasswordFilePath() {
+  const userDataPath = app.getPath('userData'); // Windows: C:\Users\<user>\AppData\Roaming\<AppName>
+  return path.join(userDataPath, 'saved_password.dat');
+}
+
+// Uzaktaki şifreyi indir
+function fetchRemotePassword() {
+  return new Promise((resolve, reject) => {
+    https
+      .get(PASSWORD_URL, (res) => {
+        let data = '';
+
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+
+        res.on('end', () => {
+          resolve(data.trim()); // Örn: "m32005"
+        });
+      })
+      .on('error', (err) => {
+        reject(err);
+      });
+  });
+}
+
+// Kayıtlı şifreyi oku (varsa)
+function readSavedPassword() {
+  const filePath = getPasswordFilePath();
+  if (fsSync.existsSync(filePath)) {
+    return fsSync.readFileSync(filePath, 'utf8').trim();
+  }
+  return null;
+}
+
+// Uygulama ikonu
+const APP_ICON = path.join(__dirname, 'app_icon.ico');
+
+// Kayıtlı şifreyi kaydet
+function savePassword(password) {
+  const filePath = getPasswordFilePath();
+  fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
+  fsSync.writeFileSync(filePath, password, 'utf8');
+}
 // Config dosyasını yükle (varsa)
 let serverConfig = null;
 const configPath = path.join(__dirname, 'config.js');
@@ -47,6 +101,7 @@ function createWindow() {
     width: 1920,
     height: 1080,
     fullscreen: true,
+    icon: APP_ICON,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -73,8 +128,36 @@ function createWindow() {
   });
 }
 
-// Uygulama hazır olduğunda
-app.whenReady().then(() => {
+// Şifre soran pencere
+function createPasswordWindow() {
+  passwordWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    title: 'Şifre Girişi',
+    icon: APP_ICON,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  passwordWindow.loadFile('password.html');
+
+  passwordWindow.on('closed', () => {
+    passwordWindow = null;
+  });
+}
+
+// Ana uygulama başlatma (server + ana pencere)
+function startMainApp() {
+  if (appStarted) {
+    return;
+  }
+  appStarted = true;
+
   // Eğer remote server URL'i varsa local server başlatma
   const hasRemoteServer = (serverConfig && serverConfig.SERVER_URL) || 
                           process.env.RENDER_URL || 
@@ -135,10 +218,37 @@ app.whenReady().then(() => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      // macOS'ta dock'tan tekrar açıldığında ana uygulamayı başlat
+      if (appStarted) {
+        createWindow();
+      } else {
+        startAppWithPasswordCheck();
+      }
     }
   });
-});
+}
+
+// Uygulama başlarken önce şifre durumunu kontrol et
+async function startAppWithPasswordCheck() {
+  try {
+    const saved = readSavedPassword();
+    const remote = await fetchRemotePassword();
+
+    // Daha önce kaydedilmiş şifre var ve uzaktaki ile aynıysa direkt aç
+    if (saved && saved === remote) {
+      startMainApp();
+    } else {
+      createPasswordWindow();
+    }
+  } catch (err) {
+    // İnternete ulaşılamazsa veya hata olursa güvenlik için şifre sor
+    console.error('Şifre kontrolü sırasında hata:', err);
+    createPasswordWindow();
+  }
+}
+
+// Uygulama hazır olduğunda
+app.whenReady().then(startAppWithPasswordCheck);
 
 // Tüm pencereler kapatıldığında
 app.on('window-all-closed', () => {
@@ -178,6 +288,32 @@ app.on('before-quit', async (event) => {
   
   // Kısa bir süre bekle (cache temizleme işleminin tamamlanması için)
   await new Promise(resolve => setTimeout(resolve, 500));
+});
+
+// Renderer'dan gelen şifreyi kontrol et
+ipcMain.on('check-password', async (event, enteredPassword) => {
+  try {
+    const remote = await fetchRemotePassword();
+
+    if (enteredPassword && enteredPassword.trim() === remote) {
+      // Doğru şifre
+      savePassword(enteredPassword.trim());
+
+      if (passwordWindow) {
+        passwordWindow.close();
+      }
+
+      startMainApp();
+
+      event.reply('check-password-result', { success: true });
+    } else {
+      // Yanlış şifre
+      event.reply('check-password-result', { success: false, message: 'Hatalı şifre' });
+    }
+  } catch (err) {
+    console.error('Şifre doğrulama hatası:', err);
+    event.reply('check-password-result', { success: false, message: 'Bağlantı hatası' });
+  }
 });
 
 // IPC: Sunucu URL'ini al

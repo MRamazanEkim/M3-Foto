@@ -106,6 +106,14 @@
           </p>
         </div>
 
+        <!-- QR Kodu Göster -->
+        <div class="setting-group">
+          <label class="setting-label">QR Kodu Göster</label>
+          <div class="setting-controls">
+            <button id="show-qr-code" class="btn-setting btn-full">QR Kodu Göster</button>
+          </div>
+        </div>
+
         <!-- Tüm Fotoğrafları Sil -->
         <div class="setting-group">
           <label class="setting-label">Fotoğraf Yönetimi</label>
@@ -114,6 +122,19 @@
             <button id="save-all-photos" class="btn-setting btn-full" style="margin-top: 10px;">💾 Tüm Fotoları Kaydet</button>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- QR Kod Paneli -->
+  <div id="qr-panel" class="qr-panel">
+    <div class="qr-panel-content">
+      <div class="qr-panel-header">
+        <h2>QR Kod</h2>
+        <button id="close-qr-panel" class="close-btn">&times;</button>
+      </div>
+      <div class="qr-panel-body">
+        <img id="qr-panel-image" src="frame.png" alt="QR Code" />
       </div>
     </div>
   </div>

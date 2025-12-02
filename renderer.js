@@ -1068,6 +1068,9 @@ function applySettings() {
   
   updateBgImagePreview();
   
+  // QR panelindeki görüntüyü güncelle
+  updateQRPanelImage();
+  
   // QR kod yazılarını güncelle (ekrandaki text alanlarını)
   updateQRTexts();
 }
@@ -1114,12 +1117,47 @@ function updateQRCodePreview() {
   }
 }
 
+// QR panelindeki görüntüyü güncelle
+function updateQRPanelImage() {
+  const qrPanelImage = document.getElementById('qr-panel-image');
+  if (!qrPanelImage) return;
+  
+  // Önce ayarlardan özel QR kod görüntüsünü kontrol et
+  if (settings.qrCodeImage) {
+    // Özel QR kod görüntüsü kullan
+    qrPanelImage.src = settings.qrCodeImage;
+    console.log('QR panel görüntüsü güncellendi (ayarlardan)');
+  } else {
+    // Varsayılan frame.png kullan
+    // Electron'da path düzeltmesi
+    if (window.location.protocol === 'file:') {
+      // Electron file protocol kullanıyor
+      const imgPath = window.location.pathname.replace(/\\/g, '/');
+      const basePath = imgPath.substring(0, imgPath.lastIndexOf('/'));
+      qrPanelImage.src = `${basePath}/frame.png`;
+    } else {
+      // Web browser (Live Server)
+      qrPanelImage.src = 'frame.png';
+    }
+    
+    qrPanelImage.onerror = function() {
+      console.error('frame.png yüklenemedi, tekrar deneniyor...');
+      // Alternatif path dene
+      qrPanelImage.src = './frame.png';
+    };
+    
+    console.log('QR panel görüntüsü güncellendi (frame.png)');
+  }
+}
+
 // Ayarları kaydet
 function saveSettings() {
   localStorage.setItem('m3foto_settings', JSON.stringify(settings));
   applySettings();
   // QR kod görüntüsü değişmişse güncelle
   updateQRCodePreview();
+  // QR panelindeki görüntüyü güncelle
+  updateQRPanelImage();
   // QR kod yazılarını güncelle
   updateQRTexts();
   if (settings.qrCodeImage !== undefined) {
@@ -1373,6 +1411,14 @@ function toggleSettingsPanel() {
   }
 }
 
+// QR kod panelini aç/kapa
+function toggleQRPanel() {
+  const panel = document.getElementById('qr-panel');
+  if (panel) {
+    panel.classList.toggle('open');
+  }
+}
+
 // Ayarlar panelini başlat
 function initSettings() {
   loadSettings();
@@ -1396,6 +1442,25 @@ function initSettings() {
   const qrTextBottomInput = document.getElementById('qr-text-bottom-input');
   const qrTextBottomAddBtn = document.getElementById('qr-text-bottom-add');
   const qrTextBottomRemoveBtn = document.getElementById('qr-text-bottom-remove');
+  const showQRCodeBtn = document.getElementById('show-qr-code');
+  const qrPanel = document.getElementById('qr-panel');
+  const closeQRPanelBtn = document.getElementById('close-qr-panel');
+  
+  // QR kod paneli açma/kapama
+  if (showQRCodeBtn) {
+    showQRCodeBtn.addEventListener('click', () => {
+      toggleQRPanel();
+    });
+  }
+  
+  if (closeQRPanelBtn) {
+    closeQRPanelBtn.addEventListener('click', () => {
+      toggleQRPanel();
+    });
+  }
+  
+  // QR panelindeki görüntüyü başlangıçta yükle
+  updateQRPanelImage();
   
   // CTRL tuşu ile panel açma/kapama
   let ctrlToggleTimer = null;
@@ -1405,6 +1470,18 @@ function initSettings() {
     if (e.key === 'Escape') {
       if (settingsPanel && settingsPanel.classList.contains('open')) {
         settingsPanel.classList.remove('open');
+      }
+      if (qrPanel && qrPanel.classList.contains('open')) {
+        qrPanel.classList.remove('open');
+      }
+      return;
+    }
+    
+    // "q" tuşu ile QR panel açma/kapama
+    if (e.key === 'q' || e.key === 'Q') {
+      // Eğer bir input alanında değilse
+      if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        toggleQRPanel();
       }
       return;
     }
@@ -1541,6 +1618,8 @@ function initSettings() {
           saveSettings();
           // QR kod görüntüsünü hemen güncelle
           generateQRCode();
+          // QR panelindeki görüntüyü de güncelle
+          updateQRPanelImage();
         };
         reader.readAsDataURL(file);
       }
@@ -1555,6 +1634,8 @@ function initSettings() {
         saveSettings();
         // QR kod görüntüsünü hemen güncelle
         generateQRCode();
+        // QR panelindeki görüntüyü de güncelle
+        updateQRPanelImage();
       }
     });
   }
