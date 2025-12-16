@@ -1,10 +1,9 @@
 // renderer.js - Electron Renderer Process
 let photos = [];
-let currentPageIndex = 0; // Hangi 18'lik grubu gösteriyoruz
+let currentPageIndex = 0; // Hangi grubu gösteriyoruz
 let slideInterval;
 let serverUrl = '';
-const PHOTOS_PER_PAGE = 18; // Her sayfada 18 fotoğraf (6x3 grid)
-const MAX_PHOTOS = 300; // En fazla 300 foto (20 slayt)
+const MAX_PHOTOS = 300; // En fazla 300 foto
 
 // Ayarlar
 let settings = {
@@ -13,8 +12,38 @@ let settings = {
   qrCodeImage: null, // Özel QR kod görüntüsü (base64 veya data URL)
   slideInterval: 10, // Slayt geçiş süresi (saniye cinsinden, default: 10 sn)
   qrTextTop: '', // QR kod üst yazısı
-  qrTextBottom: '' // QR kod alt yazısı
+  qrTextBottom: '', // QR kod alt yazısı
+  photoCount: 18 // Sayfa başına fotoğraf sayısı (18, 36, 54)
 };
+
+// Sayfa başına fotoğraf sayısını al
+function getPhotosPerPage() {
+  return settings.photoCount || 18;
+}
+
+// Grid yapısını ayarla (columns x rows)
+function getGridLayout() {
+  const count = getPhotosPerPage();
+  switch(count) {
+    case 36:
+      return { columns: 9, rows: 4 };
+    case 54:
+      return { columns: 9, rows: 6 };
+    case 18:
+    default:
+      return { columns: 6, rows: 3 };
+  }
+}
+
+// Grid CSS'ini güncelle
+function updateGridLayout() {
+  const layout = getGridLayout();
+  const photoGrid = document.querySelector('.photo-grid');
+  if (photoGrid) {
+    photoGrid.style.gridTemplateColumns = `repeat(${layout.columns}, 1fr)`;
+    photoGrid.style.gridTemplateRows = `repeat(${layout.rows}, 1fr)`;
+  }
+}
 
 // Slayt geçiş süresini al (saniyeden milisaniyeye çevir)
 function getSlideInterval() {
@@ -75,8 +104,14 @@ async function initialize() {
     // QR kod veya sabit PNG QR ekle
     generateQRCode();
     
+    // Sidebar QR kod'unu da oluştur
+    generateSidebarQRCode();
+    
     // QR kod yazılarını güncelle
     updateQRTexts();
+    
+    // Sidebar QR kod yazılarını güncelle
+    updateSidebarQRTexts();
 
     // Önce cache'den hızlı başlangıç (eğer varsa)
     const cacheLoaded = await loadFromCache();
@@ -588,6 +623,43 @@ function generateQRCode() {
   qrContainer.appendChild(img);
 }
 
+// Sidebar QR kod görüntüsünü yükle
+function generateSidebarQRCode() {
+  const qrContainer = document.getElementById('sidebar-qr-code');
+  if (!qrContainer) {
+    return;
+  }
+  
+  const img = document.createElement('img');
+  img.alt = 'QR Code';
+  img.style.width = '100%';
+  img.style.height = 'auto';
+  img.style.display = 'block';
+  img.style.maxWidth = '100%';
+  
+  // Önce ayarlardan özel QR kod görüntüsünü kontrol et
+  if (settings.qrCodeImage) {
+    // Özel QR kod görüntüsü kullan
+    img.src = settings.qrCodeImage;
+  } else {
+    // Varsayılan frame.png kullan
+    if (window.location.protocol === 'file:') {
+      const imgPath = window.location.pathname.replace(/\\/g, '/');
+      const basePath = imgPath.substring(0, imgPath.lastIndexOf('/'));
+      img.src = `${basePath}/frame.png`;
+    } else {
+      img.src = 'frame.png';
+    }
+    
+    img.onerror = function() {
+      img.src = './frame.png';
+    };
+  }
+  
+  qrContainer.innerHTML = '';
+  qrContainer.appendChild(img);
+}
+
 // Fotoğrafları sunucudan yükle (IndexedDB cache ile)
 async function loadPhotos() {
   try {
@@ -673,7 +745,7 @@ async function loadPhotos() {
                 photos[index] = blobUrl;
                 
                 // Eğer bu fotoğraf şu anda gösteriliyorsa sayfayı güncelle
-                const currentPage = Math.floor(index / PHOTOS_PER_PAGE);
+                const currentPage = Math.floor(index / getPhotosPerPage());
                 if (currentPage === currentPageIndex) {
                   showPhotoPage(currentPageIndex);
                 }
@@ -727,7 +799,7 @@ async function loadPhotos() {
       
       // Eğer yeni fotoğraflar varsa slideshow'u başlat/yeniden başlat
       if (photos.length > 0) {
-        const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+        const totalPages = Math.ceil(photos.length / getPhotosPerPage());
         
         // Eğer slideshow çalışmıyorsa başlat
         if (!slideInterval) {
@@ -823,7 +895,7 @@ function startSlideshow() {
   }
   
   // Toplam sayfa sayısını hesapla
-  const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+  const totalPages = Math.ceil(photos.length / getPhotosPerPage());
   
   // İlk sayfayı göster
   currentPageIndex = 0;
@@ -848,7 +920,7 @@ function scheduleNextPage() {
     slideInterval = null;
   }
   
-  const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+  const totalPages = Math.ceil(photos.length / getPhotosPerPage());
   
   if (totalPages <= 1) {
     console.log('⚠️ Tek sayfa var, otomatik geçiş yapılmayacak');
@@ -870,7 +942,7 @@ function scheduleNextPage() {
     console.log(`⏰ [TIMER ÇALIŞTI] ${intervalSeconds} saniye geçti!`);
     
     // Timer çalıştığında tekrar kontrol et
-    const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+    const totalPages = Math.ceil(photos.length / getPhotosPerPage());
     if (totalPages <= 1) {
       console.log(`⚠️ [TIMER] Tek sayfa var, iptal ediliyor`);
       slideInterval = null;
@@ -913,7 +985,8 @@ function stopSlideshow() {
 function showPhotoPage(pageIndex) {
   if (photos.length === 0) return;
   
-  const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+  const photosPerPage = getPhotosPerPage();
+  const totalPages = Math.ceil(photos.length / photosPerPage);
   if (pageIndex < 0 || pageIndex >= totalPages) return;
   
   const gridContainer = document.getElementById('photo-grid');
@@ -921,6 +994,9 @@ function showPhotoPage(pageIndex) {
   
   // currentPageIndex'i hemen güncelle (böylece timer doğru çalışır)
   currentPageIndex = pageIndex;
+  
+  // Grid layout'u güncelle
+  updateGridLayout();
   
   // Grid'i geçici olarak gizle (fade out) - smooth transition
   gridContainer.classList.remove('active');
@@ -931,16 +1007,19 @@ function showPhotoPage(pageIndex) {
     gridContainer.innerHTML = '';
     
     // Bu sayfa için fotoğrafları al
-    const startIndex = pageIndex * PHOTOS_PER_PAGE;
-    const endIndex = Math.min(startIndex + PHOTOS_PER_PAGE, photos.length);
+    const startIndex = pageIndex * photosPerPage;
+    const endIndex = Math.min(startIndex + photosPerPage, photos.length);
     const pagePhotos = photos.slice(startIndex, endIndex);
+    
+    // DocumentFragment kullanarak performanslı DOM manipülasyonu
+    const fragment = document.createDocumentFragment();
     
     // Her fotoğraf için grid item oluştur
     pagePhotos.forEach((photoUrl, index) => {
       const photoItem = document.createElement('div');
       photoItem.className = 'photo-item';
       // Staggered animation - her fotoğraf sırayla belirsin (daha akıcı)
-      photoItem.style.animationDelay = `${index * 0.02}s`;
+      photoItem.style.animationDelay = `${index * 0.05}s`;
       
       const img = document.createElement('img');
       img.src = photoUrl;
@@ -954,28 +1033,33 @@ function showPhotoPage(pageIndex) {
       };
       
       photoItem.appendChild(img);
-      gridContainer.appendChild(photoItem);
+      fragment.appendChild(photoItem);
     });
     
-    // 18'den az fotoğraf varsa boş placeholder ekle
-    for (let i = pagePhotos.length; i < PHOTOS_PER_PAGE; i++) {
+    // Eksik fotoğraf varsa boş placeholder ekle
+    for (let i = pagePhotos.length; i < photosPerPage; i++) {
       const emptyItem = document.createElement('div');
       emptyItem.className = 'photo-item';
       emptyItem.innerHTML = '<div class="photo-placeholder"></div>';
-      emptyItem.style.animationDelay = `${(pagePhotos.length + i) * 0.02}s`;
-      gridContainer.appendChild(emptyItem);
+      emptyItem.style.animationDelay = `${(pagePhotos.length + i) * 0.05}s`;
+      fragment.appendChild(emptyItem);
     }
     
+    // Fragment'i tek seferde DOM'a ekle (performans için)
+    gridContainer.appendChild(fragment);
+    
     // Grid'i tekrar göster (fade in) - smooth transition
-    // requestAnimationFrame ile bir sonraki frame'de göstermek daha akıcı
-    requestAnimationFrame(() => {
+    // DOM manipülasyonundan sonra daha uzun gecikme
+    setTimeout(() => {
       requestAnimationFrame(() => {
-        gridContainer.classList.add('active');
+        requestAnimationFrame(() => {
+          gridContainer.classList.add('active');
+        });
       });
-    });
+    }, 200); // 200ms gecikme ile kasmasız geçiş
     
     console.log(`Sayfa ${pageIndex + 1}/${totalPages} gösteriliyor (${startIndex + 1}-${endIndex} arası fotoğraflar, toplam ${photos.length} fotoğraf)`);
-  }, 350); // Fade out için yeterli süre (transition süresiyle uyumlu)
+  }, 1500); // Fade out için yeterli süre (transition süresiyle uyumlu - 1.5 saniye)
 }
 
 // Ayarları yükle
@@ -991,7 +1075,8 @@ function loadSettings() {
         qrCodeImage: parsed.qrCodeImage !== undefined ? parsed.qrCodeImage : settings.qrCodeImage,
         slideInterval: parsed.slideInterval !== undefined && parsed.slideInterval !== null ? parsed.slideInterval : settings.slideInterval || 10,
         qrTextTop: parsed.qrTextTop !== undefined ? parsed.qrTextTop : settings.qrTextTop || '',
-        qrTextBottom: parsed.qrTextBottom !== undefined ? parsed.qrTextBottom : settings.qrTextBottom || ''
+        qrTextBottom: parsed.qrTextBottom !== undefined ? parsed.qrTextBottom : settings.qrTextBottom || '',
+        photoCount: parsed.photoCount !== undefined && parsed.photoCount !== null ? parsed.photoCount : settings.photoCount || 18
       };
       
       // slideInterval değerini kontrol et ve düzelt (10-35 arası olmalı)
@@ -1062,6 +1147,17 @@ function applySettings() {
     slideIntervalInput.value = slideIntervalValue;
   }
   
+  // Fotoğraf sayısı UI güncelleme
+  const photoCountSelect = document.getElementById('photo-count-select');
+  const photoCountValue = settings.photoCount || 18;
+  
+  if (photoCountSelect) {
+    photoCountSelect.value = photoCountValue;
+  }
+  
+  // Grid layout'u güncelle
+  updateGridLayout();
+  
   // QR kod yazıları UI güncelleme (input field'ları güncelleme, değerleri gösterme)
   // Input field'lar boş kalacak, sadece ekrandaki text alanları güncellenecek
   // Kullanıcı yeni yazı girmek istediğinde input'a yazacak
@@ -1079,6 +1175,20 @@ function applySettings() {
 function updateQRTexts() {
   const qrTextTopEl = document.getElementById('qr-text-top');
   const qrTextBottomEl = document.getElementById('qr-text-bottom');
+  
+  if (qrTextTopEl) {
+    qrTextTopEl.textContent = settings.qrTextTop || '';
+  }
+  
+  if (qrTextBottomEl) {
+    qrTextBottomEl.textContent = settings.qrTextBottom || '';
+  }
+}
+
+// Sidebar QR kod yazılarını güncelle
+function updateSidebarQRTexts() {
+  const qrTextTopEl = document.getElementById('sidebar-qr-text-top');
+  const qrTextBottomEl = document.getElementById('sidebar-qr-text-bottom');
   
   if (qrTextTopEl) {
     qrTextTopEl.textContent = settings.qrTextTop || '';
@@ -1160,8 +1270,10 @@ function saveSettings() {
   updateQRPanelImage();
   // QR kod yazılarını güncelle
   updateQRTexts();
+  updateSidebarQRTexts();
   if (settings.qrCodeImage !== undefined) {
     generateQRCode();
+    generateSidebarQRCode();
   }
 }
 
@@ -1414,8 +1526,48 @@ function toggleSettingsPanel() {
 // QR kod panelini aç/kapa
 function toggleQRPanel() {
   const panel = document.getElementById('qr-panel');
+  const slideshowSection = document.querySelector('.slideshow-section');
+  
   if (panel) {
+    const isOpening = !panel.classList.contains('open');
     panel.classList.toggle('open');
+    
+    // Slideshow section'a class ekle/çıkar
+    if (slideshowSection) {
+      if (isOpening) {
+        slideshowSection.classList.add('qr-panel-open');
+      } else {
+        slideshowSection.classList.remove('qr-panel-open');
+      }
+    }
+  }
+}
+
+// Sidebar'ı aç/kapa
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar-section');
+  const slideshowSection = document.querySelector('.slideshow-section');
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+  
+  if (sidebar) {
+    const isOpening = !sidebar.classList.contains('open');
+    sidebar.classList.toggle('open');
+    
+    // Toggle switch'i güncelle
+    if (sidebarToggle) {
+      sidebarToggle.checked = isOpening;
+    }
+    
+    // Slideshow section'a class ekle/çıkar
+    if (slideshowSection) {
+      if (isOpening) {
+        slideshowSection.classList.add('sidebar-open');
+      } else {
+        slideshowSection.classList.remove('sidebar-open');
+      }
+    }
+    
+    console.log('Sidebar durumu:', isOpening ? 'Açık' : 'Kapalı');
   }
 }
 
@@ -1445,6 +1597,54 @@ function initSettings() {
   const showQRCodeBtn = document.getElementById('show-qr-code');
   const qrPanel = document.getElementById('qr-panel');
   const closeQRPanelBtn = document.getElementById('close-qr-panel');
+  const photoCountSelect = document.getElementById('photo-count-select');
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+  
+  // Sidebar toggle switch
+  if (sidebarToggle) {
+    // Başlangıçta sidebar durumunu kontrol et
+    const sidebar = document.getElementById('sidebar-section');
+    if (sidebar && sidebar.classList.contains('open')) {
+      sidebarToggle.checked = true;
+    }
+    
+    sidebarToggle.addEventListener('change', (e) => {
+      console.log('Sidebar toggle değişti:', e.target.checked);
+      toggleSidebar();
+    });
+  }
+  
+  // Fotoğraf sayısı değişikliği
+  if (photoCountSelect) {
+    photoCountSelect.addEventListener('change', (e) => {
+      const value = parseInt(e.target.value);
+      console.log(`📊 Fotoğraf sayısı değiştirildi: ${value}`);
+      
+      settings.photoCount = value;
+      localStorage.setItem('m3foto_settings', JSON.stringify(settings));
+      
+      // Grid layout'u güncelle
+      updateGridLayout();
+      
+      // Mevcut sayfayı yeniden göster (yeni grid yapısıyla)
+      if (photos.length > 0) {
+        // Mevcut sayfa index'ini kontrol et
+        const totalPages = Math.ceil(photos.length / getPhotosPerPage());
+        if (currentPageIndex >= totalPages) {
+          currentPageIndex = 0;
+        }
+        showPhotoPage(currentPageIndex);
+        
+        // Timer'ı yeniden başlat
+        stopSlideshow();
+        if (totalPages > 1) {
+          scheduleNextPage();
+        }
+      }
+      
+      console.log(`✅ Fotoğraf sayısı güncellendi: ${value} fotoğraf`);
+    });
+  }
   
   // QR kod paneli açma/kapama
   if (showQRCodeBtn) {
@@ -1468,20 +1668,37 @@ function initSettings() {
   document.addEventListener('keydown', (e) => {
     // ESC ile kapatma
     if (e.key === 'Escape') {
+      const sidebar = document.getElementById('sidebar-section');
+      const slideshowSection = document.querySelector('.slideshow-section');
+      
       if (settingsPanel && settingsPanel.classList.contains('open')) {
         settingsPanel.classList.remove('open');
       }
       if (qrPanel && qrPanel.classList.contains('open')) {
         qrPanel.classList.remove('open');
+        if (slideshowSection) {
+          slideshowSection.classList.remove('qr-panel-open');
+        }
+      }
+      if (sidebar && sidebar.classList.contains('open')) {
+        sidebar.classList.remove('open');
+        if (slideshowSection) {
+          slideshowSection.classList.remove('sidebar-open');
+        }
       }
       return;
     }
     
-    // "q" tuşu ile QR panel açma/kapama
+    // "q" tuşu ile Sidebar açma/kapama
     if (e.key === 'q' || e.key === 'Q') {
-      // Eğer bir input alanında değilse
+      // Eğer bir input alanında değilse ve settings paneli açık değilse
       if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
-        toggleQRPanel();
+        // Settings paneli açıksa çalışma
+        if (settingsPanel && settingsPanel.classList.contains('open')) {
+          return;
+        }
+        console.log('Q tuşuna basıldı - Sidebar toggle');
+        toggleSidebar();
       }
       return;
     }
@@ -1660,7 +1877,7 @@ function initSettings() {
       
       // Slideshow timer'ını hemen yeniden başlat (eğer slideshow çalışıyorsa)
       if (photos.length > 0) {
-        const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+        const totalPages = Math.ceil(photos.length / getPhotosPerPage());
         console.log(`📊 Toplam fotoğraf: ${photos.length}, Toplam sayfa: ${totalPages}`);
         if (totalPages > 1) {
           // Yeni süre ile yeniden başlat
@@ -1697,7 +1914,7 @@ function initSettings() {
       
       // Slideshow timer'ını hemen yeniden başlat (eğer slideshow çalışıyorsa)
       if (photos.length > 0) {
-        const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+        const totalPages = Math.ceil(photos.length / getPhotosPerPage());
         if (totalPages > 1) {
           // Mevcut timer'ı durdur
           stopSlideshow();
@@ -1828,7 +2045,7 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('keydown', (e) => {
   if (photos.length === 0) return;
   
-  const totalPages = Math.ceil(photos.length / PHOTOS_PER_PAGE);
+  const totalPages = Math.ceil(photos.length / getPhotosPerPage());
   if (totalPages <= 1) return; // Tek sayfa varsa navigasyon yok
   
   if (e.key === 'ArrowLeft') {

@@ -220,7 +220,7 @@ function startMainApp() {
     if (BrowserWindow.getAllWindows().length === 0) {
       // macOS'ta dock'tan tekrar açıldığında ana uygulamayı başlat
       if (appStarted) {
-        createWindow();
+      createWindow();
       } else {
         startAppWithPasswordCheck();
       }
